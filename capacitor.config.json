@@ -1,0 +1,73 @@
+{
+  "appId": "ru.citycar.app",
+  "appName": "CityCAR",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "capacitor",
+    "allowNavigation": [
+      "*.yandex.ru",
+      "*.googleapis.com",
+      "*.gstatic.com",
+      "*.firebaseapp.com",
+      "*.firebasestorage.googleapis.com",
+      "citycar-upload.aogoldenberg.workers.dev",
+      "citycar.opentgp.ru",
+      "api.telegram.org"
+    ]
+  },
+
+  "ios": {
+    "contentInset": "always",
+    "allowsLinkPreview": false,
+    "scrollEnabled": false,
+    "backgroundColor": "#1E3A5F",
+    "preferredContentMode": "mobile",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#1E3A5F",
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "backgroundColor": "#1E3A5F",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#1E3A5F",
+      "overlaysWebView": true
+    },
+    "Keyboard": {
+      "resize": "body",
+      "style": "DARK",
+      "resizeOnFullScreen": true
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#1E3A5F"
+    },
+    "Geolocation": {
+      "iosLocationPermissionDefaultAccuracy": "reduced"
+    },
+    "Camera": {
+      "iosLocationPermissionDefaultAccuracy": "reduced"
+    }
+  }
+}

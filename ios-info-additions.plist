@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<!--
+  ╔══════════════════════════════════════════════════════╗
+  ║  CityCAR — Дополнения к Info.plist для iOS           ║
+  ║  Добавить эти ключи в ios/App/App/Info.plist         ║
+  ╚══════════════════════════════════════════════════════╝
+
+  ИНСТРУКЦИЯ:
+  1. Открыть Xcode → App → App → Info.plist
+  2. Добавить каждый ключ ниже через "+" в редакторе
+  ИЛИ вставить XML-блоки напрямую в файл (Source Code)
+-->
+
+<plist version="1.0">
+<dict>
+
+  <!-- ── ГЕОЛОКАЦИЯ ─────────────────────────────── -->
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>CityCAR использует геолокацию для отображения ближайших автомобилей на карте и проверки зоны возврата.</string>
+
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+  <string>CityCAR использует геолокацию в фоне для уведомлений о вашей активной аренде.</string>
+
+  <!-- ── КАМЕРА ──────────────────────────────────── -->
+  <key>NSCameraUsageDescription</key>
+  <string>CityCAR использует камеру для фотофиксации состояния автомобиля при осмотре до и после поездки.</string>
+
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>CityCAR может загружать фото из галереи для документов и осмотра автомобиля.</string>
+
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>CityCAR сохраняет фото осмотра автомобиля в вашу галерею.</string>
+
+  <!-- ── УВЕДОМЛЕНИЯ ────────────────────────────── -->
+  <!-- Управляется Capacitor PushNotifications автоматически -->
+
+  <!-- ── FACE ID / БИОМЕТРИЯ ───────────────────── -->
+  <key>NSFaceIDUsageDescription</key>
+  <string>CityCAR использует Face ID для быстрого входа в аккаунт.</string>
+
+  <!-- ── НАСТРОЙКИ ПРИЛОЖЕНИЯ ───────────────────── -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>fetch</string>
+    <string>remote-notification</string>
+  </array>
+
+  <!-- Запрет масштабирования WebView -->
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+
+  <!-- Скрыть индикатор Home Bar (iPhone X+) -->
+  <key>UIHomeIndicatorAutoHidden</key>
+  <false/>
+
+  <!-- Поддержка только портретной ориентации -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+  </array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+  </array>
+
+  <!-- App Transport Security — разрешаем нужные домены -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>aogoldenberg.workers.dev</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <false/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+      </dict>
+      <key>yandex.ru</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <false/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
+
+  <!-- Privacy Manifest (iOS 17+ обязателен для App Store) -->
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>CA92.1</string>
+      </array>
+    </dict>
+  </dict>
+
+</dict>
+</plist>
