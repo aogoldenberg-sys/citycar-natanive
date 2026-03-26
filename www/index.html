@@ -3,9 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- PWA meta removed: handled by Capacitor natively -->
 <title>CityCAR — Каршеринг в Воронеж</title>
 <!-- Yandex Maps API -->
 <script src="https://api-maps.yandex.ru/2.1/?apikey=7954a834-3d66-43ca-a336-74064b7bb4c8&lang=ru_RU" type="text/javascript" crossorigin="anonymous"></script>
@@ -36,23 +34,24 @@
 }
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-family:'Inter',sans-serif;color:var(--text)}
 
-/* ── PHONE SHELL ── */
+/* ── NATIVE SHELL (Capacitor) ── */
 #shell{
   width:100%;height:100%;
-  display:flex;align-items:center;justify-content:center;
-  background:linear-gradient(135deg,#E0E0E0 0%,var(--bg2) 100%);
+  display:flex;align-items:flex-start;justify-content:flex-start;
+  background:var(--bg2);
 }
 .phone{
-  width:390px;height:844px;
+  width:100vw;
+  height:100dvh;
   background:var(--bg);
-  border-radius:50px;
+  border-radius:0;
   overflow:hidden;
   position:relative;
-  box-shadow:0 0 0 12px #C8C4BC, 0 0 0 14px #B8B4AC, 0 40px 80px rgba(0,0,0,0.25);
-}
-@media(max-width:430px){
-  #shell{align-items:flex-start}
-  .phone{width:100vw;height:100dvh;border-radius:0;box-shadow:none}
+  box-shadow:none;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  padding-left:env(safe-area-inset-left,0px);
+  padding-right:env(safe-area-inset-right,0px);
 }
 
 /* ── STATUS BAR ── */
@@ -814,23 +813,25 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
   const VAPID_KEY = 'BEeoJZwo5HOc0dKfKost7H6mShg3hjE59fyRWR90BXGhdFssONuynP4YrxyHul2RXckqaLnTFFpP3YZTcmMMwYM';
   const _WORKER_URL_LOCAL = 'https://citycar-upload.aogoldenberg.workers.dev';
 
-  // Регистрируем Service Worker
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' })
-      .then(reg => {
-        console.log('[SW] Зарегистрирован:', reg.scope);
-        window._swRegistration = reg;
-      })
-      .catch(err => console.warn('[SW] Ошибка регистрации:', err));
-
-    // Слушаем сообщения от SW (например, клик по уведомлению)
-    navigator.serviceWorker.addEventListener('message', e => {
-      if (e.data && e.data.type === 'PUSH_CLICK') {
-        // Пользователь кликнул по уведомлению — можно обработать навигацию
-        console.log('[Push] Клик по уведомлению, bookingId:', e.data.bookingId);
-      }
-    });
-  }
+  // ── PUSH: Capacitor PushNotifications (нативный, вместо Service Worker PWA) ──
+  window._swRegistration = null; // SW не используется в нативном приложении
+  document.addEventListener('deviceready', function() {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
+      const Push = window.Capacitor.Plugins.PushNotifications;
+      Push.addListener('registration', function(token) {
+        window._fcmToken = token.value;
+        console.log('[Push] Нативный токен получен');
+      });
+      Push.addListener('pushNotificationReceived', function(notification) {
+        if (window.showToastMsg) {
+          showToastMsg('🔔', notification.title || 'CityCAR', notification.body || '');
+        }
+      });
+      Push.addListener('pushNotificationActionPerformed', function(action) {
+        console.log('[Push] Клик по уведомлению:', action.notification);
+      });
+    }
+  });
 
   // Инициализируем FCM Messaging
   let _fcmMessaging = null;
@@ -848,94 +849,32 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
       }
     });
 
-    // Автоматически восстанавливаем FCM токен если разрешение уже выдано
-    // Ждём готовности Service Worker через событие, не таймаут
-    if (Notification.permission === 'granted') {
-      const autoRestorePush = async () => {
-        try {
-          // Ждём пока SW зарегистрируется (может занять до 3 сек)
-          let swReg = window._swRegistration;
-          if (!swReg) {
-            for (let i = 0; i < 10; i++) {
-              await new Promise(r => setTimeout(r, 500));
-              swReg = window._swRegistration || await navigator.serviceWorker.getRegistration('/app/');
-              if (swReg) break;
-            }
-          }
-          if (!swReg) { console.warn('[FCM] SW не готов для авто-восстановления'); return; }
-          const VAPID_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBXF7Wv3c4QjBe6QdM5X2oFD8Cb0';
-          const token = await getToken(_fcmMessaging, {
-            vapidKey: VAPID_KEY,
-            serviceWorkerRegistration: swReg
-          });
-          if (token) {
-            window._fcmToken = token;
-            console.log('[FCM] Токен восстановлен автоматически');
-            // Обновляем токен в Firestore если пользователь залогинен
-            try {
-              const sess = JSON.parse(localStorage.getItem('citycar_session') || '{}');
-              if (sess.phone) {
-                const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
-                const FB_PRJ = 'citycar-voronezh-3ed1b';
-                const qUrl = `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`;
-                const qResp = await fetch(qUrl, {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'users' }], where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: sess.phone } } }, limit: 1 } })
-                });
-                const qData = await qResp.json();
-                if (qData[0] && qData[0].document) {
-                  const docName = qData[0].document.name;
-                  await fetch(`https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=fcmToken&key=${FB_KEY}`, {
-                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fields: { fcmToken: { stringValue: token } } })
-                  });
-                }
-              }
-            } catch(e2) {}
-            if (typeof updatePushMenuStatus === 'function') updatePushMenuStatus();
-          }
-        } catch(e) {
-          console.warn('[FCM] Авто-восстановление токена:', e.message);
-        }
-      };
-      // Запускаем через 1 сек после загрузки
-      setTimeout(autoRestorePush, 1000);
-    }
+    // В нативном Capacitor токен приходит через PushNotifications plugin
+    // автоматически при регистрации (см. блок deviceready выше)
+    // Авто-восстановление токена через SW не используется
   } catch(e) {
     console.warn('[FCM] Messaging недоступен:', e.message);
   }
 
   // Глобальная функция запроса разрешения и сохранения FCM токена
-  // Вызывается после входа — с задержкой чтобы не мешать запросу геолокации
+  // В Capacitor используем нативный PushNotifications плагин
   window.requestPushPermission = async function(userPhone) {
-    if (!_fcmMessaging || !userPhone) return;
+    if (!userPhone) return;
     try {
-      // Если разрешение уже есть — не спрашиваем снова
-      let permission = Notification.permission;
-      if (permission === 'default') {
-        permission = await Notification.requestPermission();
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
+        const Push = window.Capacitor.Plugins.PushNotifications;
+        const permResult = await Push.requestPermissions();
+        if (permResult.receive === 'granted') {
+          await Push.register(); // токен придёт через listener 'registration'
+          console.log('[Push] Нативный push зарегистрирован');
+        } else {
+          console.log('[Push] Разрешение не получено');
+        }
       }
-      if (permission !== 'granted') {
-        console.log('[Push] Разрешение не получено:', permission);
-        return;
-      }
-
-      const swReg = window._swRegistration ||
-        await navigator.serviceWorker.getRegistration('/app/');
-      if (!swReg) return;
-
-      const token = await getToken(_fcmMessaging, {
-        vapidKey: VAPID_KEY,
-        serviceWorkerRegistration: swReg
-      });
-      if (!token) return;
-      console.log('[FCM] Токен получен');
-
-      // Сохраняем fcmToken напрямую через Firestore REST API
-      // (избегаем конфликта переменных с импортами выше)
-      const phone = userPhone.trim();
-      const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
-      const FB_PRJ = 'citycar-voronezh-3ed1b';
+    } catch(e) {
+      console.warn('[Push] Ошибка запроса разрешения:', e.message);
+    }
+  };
       const qUrl   = `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`;
       const qResp  = await fetch(qUrl, {
         method: 'POST',
@@ -1246,7 +1185,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
 <!-- ████ SPLASH ████ -->
 <div class="screen active" id="s-splash">
   <div class="splash-logo">
-    <img src="/app/logo.png" alt="CityCAR" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+    <img src="logo.png" alt="CityCAR" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
     <div style="display:none;font-size:36px;font-weight:800;color:#fff;letter-spacing:-1px">City<span style="color:#67e8f9">CAR</span></div>
   </div>
   <div class="splash-tagline">Аренда авто · Воронеж</div>
@@ -2799,9 +2738,9 @@ function showMyDocsSheet() {
 // ── ПРОСМОТР PDF ──
 function openDoc(slug) {
   const docs = {
-    dogovor: { title:'📋 Договор аренды ТС',           url:'https://citycar.opentgp.ru/app/docs/dogovor.pdf' },
-    pd:      { title:'🔒 Политика конфиденциальности', url:'https://citycar.opentgp.ru/app/docs/PD.pdf' },
-    pravila: { title:'🚗 Правила пользования',         url:'https://citycar.opentgp.ru/app/docs/dogovor.pdf' }
+    dogovor: { title:'📋 Договор аренды ТС',           url:'https://citycar.opentgp.ru/docs/dogovor.pdf' },
+    pd:      { title:'🔒 Политика конфиденциальности', url:'https://citycar.opentgp.ru/docs/PD.pdf' },
+    pravila: { title:'🚗 Правила пользования',         url:'https://citycar.opentgp.ru/docs/dogovor.pdf' }
   };
   const doc = docs[slug];
   if (!doc) return;
@@ -7219,20 +7158,15 @@ ${postPhotoLinks}
 
 // ── PUSH И TELEGRAM УВЕДОМЛЕНИЯ ─────────────────────────────────────────────
 
-// Вызывается напрямую по клику — только так браузер разрешает Notification
+// Вызывается по клику — запрашивает нативное разрешение через Capacitor
 window.enablePushNotifications = async function() {
   const label  = document.getElementById('push-menu-label');
   const sub    = document.getElementById('push-menu-sub');
   const status = document.getElementById('push-menu-status');
 
-  // Проверяем текущий статус
-  if (Notification.permission === 'granted' && window._fcmToken) {
+  // Уже включено
+  if (window._fcmToken) {
     showToastMsg('✅','Уведомления уже включены','Push работает');
-    return;
-  }
-  if (Notification.permission === 'denied') {
-    showToastMsg('⚠️','Уведомления заблокированы',
-      'Разрешите уведомления в настройках браузера для этого сайта');
     return;
   }
 
@@ -7240,80 +7174,16 @@ window.enablePushNotifications = async function() {
   if (status) status.textContent = '...';
 
   try {
-    // ВАЖНО: requestPermission вызывается СИНХРОННО в обработчике клика
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      if (sub)    sub.textContent    = 'Разрешение отклонено';
-      if (status) status.textContent = 'Выкл';
-      showToastMsg('⚠️','Разрешение не выдано','Вы можете включить позже в настройках');
-      return;
-    }
-
-    if (sub) sub.textContent = 'Получаем токен...';
-
-    // Теперь получаем FCM токен
-    if (!window._fcmMessaging) {
-      if (sub) sub.textContent = 'Firebase недоступен, попробуйте в Chrome';
-      return;
-    }
-
-    const swReg = window._swRegistration ||
-      await navigator.serviceWorker.getRegistration('/app/');
-    if (!swReg) {
-      if (sub) sub.textContent = 'Service Worker не зарегистрирован';
-      return;
-    }
-
-    const VAPID = 'BEeoJZwo5HOc0dKfKost7H6mShg3hjE59fyRWR90BXGhdFssONuynP4YrxyHul2RXckqaLnTFFpP3YZTcmMMwYM';
-    const { getToken } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js');
-    const token = await getToken(window._fcmMessaging, {
-      vapidKey: VAPID,
-      serviceWorkerRegistration: swReg
-    });
-
-    if (!token) {
-      if (sub) sub.textContent = 'Не удалось получить токен';
-      return;
-    }
-
-    window._fcmToken = token;
-    console.log('[FCM] Токен получен по клику');
-
-    // Сохраняем в Firestore через REST (без конфликтов с импортами)
-    const phone = (loadSession() || {}).phone || state.phone;
-    if (phone) {
-      const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
-      const FB_PRJ = 'citycar-voronezh-3ed1b';
-      const qResp = await fetch(
-        `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            structuredQuery: {
-              from: [{ collectionId: 'users' }],
-              where: { fieldFilter: {
-                field: { fieldPath: 'phone' }, op: 'EQUAL',
-                value: { stringValue: phone }
-              }},
-              limit: 1
-            }
-          })
-        }
-      );
-      const qData = await qResp.json();
-      if (qData[0] && qData[0].document) {
-        const docName = qData[0].document.name;
-        await fetch(
-          `https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=fcmToken&key=${FB_KEY}`,
-          {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fields: { fcmToken: { stringValue: token } } })
-          }
-        );
-        console.log('[FCM] Токен сохранён в Firestore');
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
+      const Push = window.Capacitor.Plugins.PushNotifications;
+      const permResult = await Push.requestPermissions();
+      if (permResult.receive !== 'granted') {
+        if (sub)    sub.textContent    = 'Разрешение отклонено';
+        if (status) status.textContent = 'Выкл';
+        showToastMsg('⚠️','Разрешение не выдано','Вы можете включить позже в настройках');
+        return;
       }
+      await Push.register(); // токен придёт через listener 'registration' (см. deviceready)
     }
 
     // Обновляем UI
@@ -7924,8 +7794,9 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
 </div>
 
 <script>
-// ── CLEANUP: отписка от всех Firebase listeners при закрытии страницы ──
-window.addEventListener('beforeunload', function() {
+// ── CLEANUP: отписка от Firebase listeners при сворачивании/закрытии приложения ──
+// Используем Capacitor App plugin вместо beforeunload (не работает в нативном)
+function _cleanupListeners() {
   if (window._userUnsubscribe)    { window._userUnsubscribe();    window._userUnsubscribe    = null; }
   if (window._bookingUnsubscribe) { window._bookingUnsubscribe(); window._bookingUnsubscribe = null; }
   if (window._zoneUnsubscribe)    { window._zoneUnsubscribe();    window._zoneUnsubscribe    = null; }
@@ -7934,7 +7805,18 @@ window.addEventListener('beforeunload', function() {
   if (window._pendingCheckInterval) { clearInterval(window._pendingCheckInterval); window._pendingCheckInterval = null; }
   window._currentUserListener = null;
   window._fleetIntervalInitialized = false;
+}
+// Capacitor: срабатывает когда приложение уходит в фон
+document.addEventListener('deviceready', function() {
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+    window.Capacitor.Plugins.App.addListener('appStateChange', function(state) {
+      if (!state.isActive) { _cleanupListeners(); }
+    });
+  }
 });
+// Фоллбэк для браузера/PWA
+window.addEventListener('beforeunload', _cleanupListeners);
+window.addEventListener('pagehide', _cleanupListeners);
 </script>
 </body>
 </html>
