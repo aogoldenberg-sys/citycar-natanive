@@ -1,0 +1,75 @@
+name: Build Release Signed APK/AAB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - run: npm install
+      - run: npx cap add android
+      - run: npx cap sync android
+      
+      # Генерируем keystore
+      - name: Generate keystore
+        run: |
+          mkdir -p android/app/keystore
+          keytool -genkey -v \
+            -keystore android/app/keystore/release.keystore \
+            -alias citycar \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass citycar2024 \
+            -keypass citycar2024 \
+            -dname "CN=CityCAR, OU=Development, O=CityCAR, L=Voronezh, ST=Voronezh, C=RU"
+      
+      # Собираем APK (для RuStore)
+      - name: Build Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=../app/keystore/release.keystore \
+            -Pandroid.injected.signing.store.password=citycar2024 \
+            -Pandroid.injected.signing.key.alias=citycar \
+            -Pandroid.injected.signing.key.password=citycar2024
+      
+      # Собираем AAB (для Google Play)
+      - name: Build Release AAB
+        run: |
+          cd android
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=../app/keystore/release.keystore \
+            -Pandroid.injected.signing.store.password=citycar2024 \
+            -Pandroid.injected.signing.key.alias=citycar \
+            -Pandroid.injected.signing.key.password=citycar2024
+      
+      # Загружаем APK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: citycar-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+      
+      # Загружаем AAB
+      - uses: actions/upload-artifact@v4
+        with:
+          name: citycar-release-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+      
+      # Сохраняем keystore (ВАЖНО!)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keystore-backup
+          path: android/app/keystore/release.keystore
