@@ -22,7 +22,7 @@ jobs:
       - run: npx cap add android
       - run: npx cap sync android
       
-      # Генерируем keystore
+      # Генерируем keystore в правильной папке
       - name: Generate keystore
         run: |
           mkdir -p android/app/keystore
@@ -36,12 +36,16 @@ jobs:
             -keypass citycar2024 \
             -dname "CN=CityCAR, OU=Development, O=CityCAR, L=Voronezh, ST=Voronezh, C=RU"
       
+      # Проверяем что keystore создан
+      - name: Check keystore
+        run: ls -la android/app/keystore/
+      
       # Собираем APK (для RuStore)
       - name: Build Release APK
         run: |
           cd android
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=../app/keystore/release.keystore \
+            -Pandroid.injected.signing.store.file=app/keystore/release.keystore \
             -Pandroid.injected.signing.store.password=citycar2024 \
             -Pandroid.injected.signing.key.alias=citycar \
             -Pandroid.injected.signing.key.password=citycar2024
@@ -51,7 +55,7 @@ jobs:
         run: |
           cd android
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=../app/keystore/release.keystore \
+            -Pandroid.injected.signing.store.file=app/keystore/release.keystore \
             -Pandroid.injected.signing.store.password=citycar2024 \
             -Pandroid.injected.signing.key.alias=citycar \
             -Pandroid.injected.signing.key.password=citycar2024
