@@ -22,12 +22,12 @@ jobs:
       - run: npx cap add android
       - run: npx cap sync android
       
-      # Генерируем keystore в корне проекта (не в app/)
+      # Генерируем keystore в android/app/keystore/
       - name: Generate keystore
         run: |
-          mkdir -p keystore
+          mkdir -p android/app/keystore
           keytool -genkey -v \
-            -keystore keystore/release.keystore \
+            -keystore android/app/keystore/release.keystore \
             -alias citycar \
             -keyalg RSA \
             -keysize 2048 \
@@ -38,31 +38,26 @@ jobs:
       
       # Проверяем что keystore создан
       - name: Check keystore
-        run: ls -la keystore/
-      
-      # Копируем keystore в android/app/ (куда Gradle ищет)
-      - name: Copy keystore to android app
         run: |
-          mkdir -p android/app/keystore
-          cp keystore/release.keystore android/app/keystore/
           ls -la android/app/keystore/
+          pwd
       
-      # Собираем APK (для RuStore) - путь относительно android/
+      # Собираем APK с абсолютным путем
       - name: Build Release APK
         run: |
           cd android
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=keystore/release.keystore \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/keystore/release.keystore \
             -Pandroid.injected.signing.store.password=citycar2024 \
             -Pandroid.injected.signing.key.alias=citycar \
             -Pandroid.injected.signing.key.password=citycar2024
       
-      # Собираем AAB (для Google Play)
+      # Собираем AAB с абсолютным путем
       - name: Build Release AAB
         run: |
           cd android
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=keystore/release.keystore \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/keystore/release.keystore \
             -Pandroid.injected.signing.store.password=citycar2024 \
             -Pandroid.injected.signing.key.alias=citycar \
             -Pandroid.injected.signing.key.password=citycar2024
@@ -83,4 +78,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: keystore-backup
-          path: keystore/release.keystore
+          path: android/app/keystore/release.keystore
