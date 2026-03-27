@@ -67,7 +67,12 @@
       "iosLocationPermissionDefaultAccuracy": "reduced"
     },
     "Camera": {
-      "iosLocationPermissionDefaultAccuracy": "reduced"
+      "allowEditing": false,
+      "resultType": "uri",
+      "saveToGallery": false,
+      "source": "prompt",
+      "direction": "rear",
+      "presentationStyle": "fullscreen"
     }
   }
 }
