@@ -19,10 +19,18 @@ jobs:
           distribution: 'temurin'
           
       - run: npm install
-      - run: npx cap add android
+      
+      - name: Add Android platform if not exists
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          else
+            echo "Android platform already exists"
+          fi
+      
       - run: npx cap sync android
       
-      # Генерируем keystore в android/app/keystore/
+      # Генерируем keystore
       - name: Generate keystore
         run: |
           mkdir -p android/app/keystore
@@ -36,11 +44,47 @@ jobs:
             -keypass citycar2024 \
             -dname "CN=CityCAR, OU=Development, O=CityCAR, L=Voronezh, ST=Voronezh, C=RU"
       
-      # Проверяем что keystore создан
-      - name: Check keystore
+      # Добавляем разрешения в AndroidManifest.xml
+      - name: Add Android permissions
         run: |
-          ls -la android/app/keystore/
-          pwd
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+              
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/AppTheme">
+                  
+                  <activity
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+                      android:name=".MainActivity"
+                      android:label="@string/title_activity_main"
+                      android:theme="@style/AppTheme.NoActionBarLaunch"
+                      android:launchMode="singleTask"
+                      android:exported="true">
+                      
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      
+                  </activity>
+                  
+              </application>
+              
+          </manifest>
+          EOF
       
       # Собираем APK с абсолютным путем
       - name: Build Release APK
