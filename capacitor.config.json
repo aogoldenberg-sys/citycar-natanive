@@ -1,78 +1,37 @@
 {
-  "appId": "ru.citycar.app",
+  "appId": "com.citycar.app",
   "appName": "CityCAR",
-  "webDir": "www",
+  "webDir": ".",
   "bundledWebRuntime": false,
-
   "server": {
     "androidScheme": "https",
     "iosScheme": "capacitor",
-    "allowNavigation": [
-      "*.yandex.ru",
-      "*.googleapis.com",
-      "*.gstatic.com",
-      "*.firebaseapp.com",
-      "*.firebasestorage.googleapis.com",
-      "citycar-upload.aogoldenberg.workers.dev",
-      "citycar.opentgp.ru",
-      "api.telegram.org"
-    ]
+    "cleartext": true
   },
-
   "ios": {
     "contentInset": "always",
     "allowsLinkPreview": false,
-    "scrollEnabled": false,
-    "backgroundColor": "#1E3A5F",
-    "preferredContentMode": "mobile",
-    "limitsNavigationsToAppBoundDomains": false
+    "scrollEnabled": true,
+    "backgroundColor": "#F5F5F5",
+    "preferredContentMode": "mobile"
   },
-
   "android": {
+    "backgroundColor": "#F5F5F5",
     "allowMixedContent": false,
-    "backgroundColor": "#1E3A5F",
-    "captureInput": true,
-    "webContentsDebuggingEnabled": false
+    "captureInput": true
   },
-
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 2000,
-      "launchAutoHide": true,
       "backgroundColor": "#1E3A5F",
       "androidSplashResourceName": "splash",
-      "androidScaleType": "CENTER_CROP",
-      "showSpinner": false,
-      "splashFullScreen": true,
-      "splashImmersive": true
-    },
-    "StatusBar": {
-      "style": "DARK",
-      "backgroundColor": "#1E3A5F",
-      "overlaysWebView": true
-    },
-    "Keyboard": {
-      "resize": "body",
-      "style": "DARK",
-      "resizeOnFullScreen": true
-    },
-    "PushNotifications": {
-      "presentationOptions": ["badge", "sound", "alert"]
-    },
-    "LocalNotifications": {
-      "smallIcon": "ic_stat_icon_config_sample",
-      "iconColor": "#1E3A5F"
-    },
-    "Geolocation": {
-      "iosLocationPermissionDefaultAccuracy": "reduced"
+      "androidScaleType": "CENTER_CROP"
     },
     "Camera": {
-      "allowEditing": false,
-      "resultType": "uri",
-      "saveToGallery": false,
-      "source": "prompt",
-      "direction": "rear",
-      "presentationStyle": "fullscreen"
+      "ios": {
+        "allowEditing": false,
+        "resultType": "uri"
+      }
     }
   }
 }
