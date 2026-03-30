@@ -1,7 +1,7 @@
 {
   "appId": "com.citycar.app",
   "appName": "CityCAR",
-  "webDir": ".",
+  "webDir": "www",
   "bundledWebRuntime": false,
   "server": {
     "androidScheme": "https",
