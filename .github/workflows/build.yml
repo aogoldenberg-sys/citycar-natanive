@@ -8,9 +8,15 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'  # Добавьте кэширование
+      
+      # ⬇️ ОБЯЗАТЕЛЬНЫЙ ШАГ - установка зависимостей
+      - name: Install dependencies
+        run: npm ci
       
       - name: Add iOS platform if not exists
         run: |
@@ -43,13 +49,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
+      
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+      
+      # ⬇️ ОБЯЗАТЕЛЬНЫЙ ШАГ
+      - name: Install dependencies
+        run: npm ci
       
       - name: Add Android platform if not exists
         run: |
@@ -61,13 +74,15 @@ jobs:
       
       - run: npx cap sync android
       
-      # Добавляем разрешения в AndroidManifest.xml
+      # Добавьте права на выполнение для gradlew
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+      
       - name: Add Android permissions
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.CAMERA" />
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
@@ -82,7 +97,6 @@ jobs:
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:supportsRtl="true"
                   android:theme="@style/AppTheme">
-                  
                   <activity
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
                       android:name=".MainActivity"
@@ -90,16 +104,12 @@ jobs:
                       android:theme="@style/AppTheme.NoActionBarLaunch"
                       android:launchMode="singleTask"
                       android:exported="true">
-                      
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
-                      
                   </activity>
-                  
               </application>
-              
           </manifest>
           EOF
       
