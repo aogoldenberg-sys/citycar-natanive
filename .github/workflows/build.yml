@@ -1,5 +1,8 @@
 name: Build CityCAR iOS & Android
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
 
@@ -7,28 +10,28 @@ jobs:
   build-ios:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'  # Добавьте кэширование
-      
-      # ⬇️ ОБЯЗАТЕЛЬНЫЙ ШАГ - установка зависимостей
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Add iOS platform if not exists
+          cache: 'npm'  # ← Теперь работает быстро!
+
+      - name: Install dependencies (cached)
+        run: npm ci  # ← Использует package-lock.json
+
+      - name: Add iOS platform
         run: |
           if [ ! -d "ios" ]; then
             npx cap add ios
           else
-            echo "iOS platform already exists"
+            echo "iOS platform exists, syncing only"
+            npx cap sync ios
           fi
-      
-      - run: npx cap sync ios
-      
-      - name: Build iOS
+
+      - name: Build iOS Archive
         run: |
           cd ios/App
           xcodebuild -workspace App.xcworkspace \
@@ -38,47 +41,56 @@ jobs:
             -archivePath build/App.xcarchive \
             archive \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
-      
-      - uses: actions/upload-artifact@v4
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Create IPA
+        run: |
+          cd ios/App
+          mkdir -p build/Payload
+          cp -r build/App.xcarchive/Products/Applications/*.app build/Payload/
+          cd build && zip -r CityCAR.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: ios-archive
-          path: ios/App/build/App.xcarchive
+          name: CityCAR-iOS
+          path: ios/App/build/CityCAR.ipa
 
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
-      
-      - uses: actions/setup-java@v4
+          cache: 'npm'  # ← Кэширование включено
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      
-      # ⬇️ ОБЯЗАТЕЛЬНЫЙ ШАГ
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Add Android platform if not exists
+
+      - name: Install dependencies (cached)
+        run: npm ci  # ← Быстрая установка из кэша
+
+      - name: Add Android platform
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           else
-            echo "Android platform already exists"
+            echo "Android platform exists, syncing only"
+            npx cap sync android
           fi
-      
-      - run: npx cap sync android
-      
-      # Добавьте права на выполнение для gradlew
+
       - name: Make gradlew executable
         run: chmod +x android/gradlew
-      
-      - name: Add Android permissions
+
+      - name: Update AndroidManifest.xml
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -96,7 +108,8 @@ jobs:
                   android:label="@string/app_name"
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:supportsRtl="true"
-                  android:theme="@style/AppTheme">
+                  android:theme="@style/AppTheme"
+                  android:usesCleartextTraffic="true">
                   <activity
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
                       android:name=".MainActivity"
@@ -112,10 +125,14 @@ jobs:
               </application>
           </manifest>
           EOF
-      
-      - run: cd android && ./gradlew assembleDebug
-      
-      - uses: actions/upload-artifact@v4
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: android-apk
+          name: CityCAR-Android
           path: android/app/build/outputs/apk/debug/app-debug.apk
