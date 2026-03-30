@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<!-- PWA meta removed: handled by Capacitor natively -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CityCAR — Каршеринг в Воронеж</title>
 <!-- Yandex Maps API -->
 <script src="https://api-maps.yandex.ru/2.1/?apikey=7954a834-3d66-43ca-a336-74064b7bb4c8&lang=ru_RU" type="text/javascript" crossorigin="anonymous"></script>
@@ -34,24 +36,23 @@
 }
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-family:'Inter',sans-serif;color:var(--text)}
 
-/* ── NATIVE SHELL (Capacitor) ── */
+/* ── PHONE SHELL ── */
 #shell{
   width:100%;height:100%;
-  display:flex;align-items:flex-start;justify-content:flex-start;
-  background:var(--bg2);
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#E0E0E0 0%,var(--bg2) 100%);
 }
 .phone{
-  width:100vw;
-  height:100dvh;
+  width:390px;height:844px;
   background:var(--bg);
-  border-radius:0;
+  border-radius:50px;
   overflow:hidden;
   position:relative;
-  box-shadow:none;
-  padding-top:env(safe-area-inset-top,0px);
-  padding-bottom:env(safe-area-inset-bottom,0px);
-  padding-left:env(safe-area-inset-left,0px);
-  padding-right:env(safe-area-inset-right,0px);
+  box-shadow:0 0 0 12px #C8C4BC, 0 0 0 14px #B8B4AC, 0 40px 80px rgba(0,0,0,0.25);
+}
+@media(max-width:430px){
+  #shell{align-items:flex-start}
+  .phone{width:100vw;height:100dvh;border-radius:0;box-shadow:none}
 }
 
 /* ── STATUS BAR ── */
@@ -813,25 +814,23 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
   const VAPID_KEY = 'BEeoJZwo5HOc0dKfKost7H6mShg3hjE59fyRWR90BXGhdFssONuynP4YrxyHul2RXckqaLnTFFpP3YZTcmMMwYM';
   const _WORKER_URL_LOCAL = 'https://citycar-upload.aogoldenberg.workers.dev';
 
-  // ── PUSH: Capacitor PushNotifications (нативный, вместо Service Worker PWA) ──
-  window._swRegistration = null; // SW не используется в нативном приложении
-  document.addEventListener('deviceready', function() {
-    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
-      const Push = window.Capacitor.Plugins.PushNotifications;
-      Push.addListener('registration', function(token) {
-        window._fcmToken = token.value;
-        console.log('[Push] Нативный токен получен');
-      });
-      Push.addListener('pushNotificationReceived', function(notification) {
-        if (window.showToastMsg) {
-          showToastMsg('🔔', notification.title || 'CityCAR', notification.body || '');
-        }
-      });
-      Push.addListener('pushNotificationActionPerformed', function(action) {
-        console.log('[Push] Клик по уведомлению:', action.notification);
-      });
-    }
-  });
+  // Регистрируем Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' })
+      .then(reg => {
+        console.log('[SW] Зарегистрирован:', reg.scope);
+        window._swRegistration = reg;
+      })
+      .catch(err => console.warn('[SW] Ошибка регистрации:', err));
+
+    // Слушаем сообщения от SW (например, клик по уведомлению)
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data && e.data.type === 'PUSH_CLICK') {
+        // Пользователь кликнул по уведомлению — можно обработать навигацию
+        console.log('[Push] Клик по уведомлению, bookingId:', e.data.bookingId);
+      }
+    });
+  }
 
   // Инициализируем FCM Messaging
   let _fcmMessaging = null;
@@ -849,32 +848,94 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
       }
     });
 
-    // В нативном Capacitor токен приходит через PushNotifications plugin
-    // автоматически при регистрации (см. блок deviceready выше)
-    // Авто-восстановление токена через SW не используется
+    // Автоматически восстанавливаем FCM токен если разрешение уже выдано
+    // Ждём готовности Service Worker через событие, не таймаут
+    if (Notification.permission === 'granted') {
+      const autoRestorePush = async () => {
+        try {
+          // Ждём пока SW зарегистрируется (может занять до 3 сек)
+          let swReg = window._swRegistration;
+          if (!swReg) {
+            for (let i = 0; i < 10; i++) {
+              await new Promise(r => setTimeout(r, 500));
+              swReg = window._swRegistration || await navigator.serviceWorker.getRegistration('/app/');
+              if (swReg) break;
+            }
+          }
+          if (!swReg) { console.warn('[FCM] SW не готов для авто-восстановления'); return; }
+          const VAPID_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBXF7Wv3c4QjBe6QdM5X2oFD8Cb0';
+          const token = await getToken(_fcmMessaging, {
+            vapidKey: VAPID_KEY,
+            serviceWorkerRegistration: swReg
+          });
+          if (token) {
+            window._fcmToken = token;
+            console.log('[FCM] Токен восстановлен автоматически');
+            // Обновляем токен в Firestore если пользователь залогинен
+            try {
+              const sess = JSON.parse(localStorage.getItem('citycar_session') || '{}');
+              if (sess.phone) {
+                const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
+                const FB_PRJ = 'citycar-voronezh-3ed1b';
+                const qUrl = `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`;
+                const qResp = await fetch(qUrl, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'users' }], where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: sess.phone } } }, limit: 1 } })
+                });
+                const qData = await qResp.json();
+                if (qData[0] && qData[0].document) {
+                  const docName = qData[0].document.name;
+                  await fetch(`https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=fcmToken&key=${FB_KEY}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fields: { fcmToken: { stringValue: token } } })
+                  });
+                }
+              }
+            } catch(e2) {}
+            if (typeof updatePushMenuStatus === 'function') updatePushMenuStatus();
+          }
+        } catch(e) {
+          console.warn('[FCM] Авто-восстановление токена:', e.message);
+        }
+      };
+      // Запускаем через 1 сек после загрузки
+      setTimeout(autoRestorePush, 1000);
+    }
   } catch(e) {
     console.warn('[FCM] Messaging недоступен:', e.message);
   }
 
   // Глобальная функция запроса разрешения и сохранения FCM токена
-  // В Capacitor используем нативный PushNotifications плагин
+  // Вызывается после входа — с задержкой чтобы не мешать запросу геолокации
   window.requestPushPermission = async function(userPhone) {
-    if (!userPhone) return;
+    if (!_fcmMessaging || !userPhone) return;
     try {
-      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
-        const Push = window.Capacitor.Plugins.PushNotifications;
-        const permResult = await Push.requestPermissions();
-        if (permResult.receive === 'granted') {
-          await Push.register(); // токен придёт через listener 'registration'
-          console.log('[Push] Нативный push зарегистрирован');
-        } else {
-          console.log('[Push] Разрешение не получено');
-        }
+      // Если разрешение уже есть — не спрашиваем снова
+      let permission = Notification.permission;
+      if (permission === 'default') {
+        permission = await Notification.requestPermission();
       }
-    } catch(e) {
-      console.warn('[Push] Ошибка запроса разрешения:', e.message);
-    }
-  };
+      if (permission !== 'granted') {
+        console.log('[Push] Разрешение не получено:', permission);
+        return;
+      }
+
+      const swReg = window._swRegistration ||
+        await navigator.serviceWorker.getRegistration('/app/');
+      if (!swReg) return;
+
+      const token = await getToken(_fcmMessaging, {
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: swReg
+      });
+      if (!token) return;
+      console.log('[FCM] Токен получен');
+
+      // Сохраняем fcmToken напрямую через Firestore REST API
+      // (избегаем конфликта переменных с импортами выше)
+      const phone = userPhone.trim();
+      const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
+      const FB_PRJ = 'citycar-voronezh-3ed1b';
       const qUrl   = `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`;
       const qResp  = await fetch(qUrl, {
         method: 'POST',
@@ -929,6 +990,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
       window._userUnsubscribe = onSnapshot(ref, (snap) => {
         if (!snap.exists()) return;
         const data = snap.data();
+        window._cachedUserData = data; // кэш — используется в accrueCoinsAfterTrip
         // Обновляем localStorage и UI
         try {
           const session = JSON.parse(localStorage.getItem('citycar_session') || '{}');
@@ -991,8 +1053,26 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
           if (window._activeRental?.id !== bookingId) {
             data.startDT     = new Date(data.startedAt);
             data.paidUntilDT = data.paidUntil ? new Date(data.paidUntil) : null;
+            // Скрываем экран «Оплачено» если был открыт
+            const bpaid = document.getElementById('screen-booking-paid');
+            if (bpaid) bpaid.classList.remove('active');
             startRentalScreen(data);
             showToastMsg('🚗', 'Аренда началась!', 'Счётчик времени запущен');
+          }
+        }
+
+        // Оператор завершил аренду принудительно → показываем финальный экран
+        if (data.status === 'done' && window._activeRental?.id === bookingId) {
+          if (window._activeRental && !window._operatorFinishedHandled) {
+            window._operatorFinishedHandled = true;
+            if (window._rentalTimer) { clearInterval(window._rentalTimer); window._rentalTimer = null; }
+            if (window._pendingCheckInterval) { clearInterval(window._pendingCheckInterval); window._pendingCheckInterval = null; }
+            ['screen-rental','screen-inspection','screen-pre-inspection','screen-pending-finish','screen-booking-paid'].forEach(id => {
+              const el = document.getElementById(id);
+              if (el) el.classList.remove('active');
+            });
+            showToastMsg('🏁', 'Аренда завершена', 'Оператор завершил аренду');
+            setTimeout(() => showFinalScreen(), 800);
           }
         }
 
@@ -1130,37 +1210,33 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
   };
 
   // Realtime слушатель — обновляем статусы авто в реальном времени
+  // Realtime слушатель автопарка через onSnapshot — обновляется мгновенно из CRM
   window.startFleetListener = async function() {
+    // Если уже подписаны — не создаём повторно
+    if (window._fleetUnsubscribe) return;
     try {
-      // ОПТИМИЗАЦИЯ: вместо onSnapshot (постоянное соединение) используем getDocs
-      // с кэшем на 2 минуты — экономит ~90% чтений Firestore по fleet
-      const now = Date.now();
-      if (window._fleetLastFetch && (now - window._fleetLastFetch) < 300000) return; // кэш 5 мин
-      window._fleetLastFetch = now;
-
-      const { collection: col3, getDocs } =
+      const { collection: col3, onSnapshot } =
         await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const snap = await getDocs(col3(db, 'fleet'));
-      if (snap.empty) return;
-      window._fleetData = [];
-      snap.forEach(d => window._fleetData.push({ id: d.id, ...d.data() }));
-      _fleetData = window._fleetData;
-      if (typeof renderFleetTab === 'function') renderFleetTab();
-      if (typeof renderMapCarsStrip === 'function') renderMapCarsStrip();
-      if (typeof refreshMapPlacemarks === 'function') refreshMapPlacemarks();
-      if (typeof renderBookingCars === 'function') renderBookingCars();
-    } catch(e) {}
+      window._fleetUnsubscribe = onSnapshot(col3(db, 'fleet'), (snap) => {
+        if (snap.empty) return;
+        window._fleetData = [];
+        snap.forEach(d => window._fleetData.push({ id: d.id, ...d.data() }));
+        _fleetData = window._fleetData;
+        window._fleetCatalogFetched = Date.now();
+        if (typeof renderFleetTab === 'function') renderFleetTab();
+        if (typeof renderMapCarsStrip === 'function') renderMapCarsStrip();
+        if (typeof refreshMapPlacemarks === 'function') refreshMapPlacemarks();
+        if (typeof renderBookingCars === 'function') renderBookingCars();
+      }, (err) => {
+        console.warn('[Fleet] onSnapshot ошибка:', err.message);
+        window._fleetUnsubscribe = null; // сбросить чтобы можно было переподключиться
+      });
+    } catch(e) {
+      console.warn('[Fleet] startFleetListener:', e.message);
+    }
   };
-
-  // Обновляем fleet каждые 10 минут — ONE-TIME guard
-  if (!window._fleetIntervalInitialized) {
-    window._fleetIntervalInitialized = true;
-    window._fleetInterval = setInterval(() => {
-      window._fleetLastFetch = 0; // сбросить кэш
-      if (window.startFleetListener) window.startFleetListener();
-    }, 600000); // 10 минут (было 5)
-  }
 </script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.firebaseapp.com https://*.googleapis.com https://api-maps.yandex.ru https://*.gstatic.com https://firestore.googleapis.com https://citycar-upload.aogoldenberg.workers.dev; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.gstatic.com https://api-maps.yandex.ru https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data: https://*.googleusercontent.com https://citycar-upload.aogoldenberg.workers.dev https://citycar36.ru https://*.googleapis.com; connect-src 'self' https://*.firebaseio.com https://*.googleapis.com https://citycar-upload.aogoldenberg.workers.dev https://firestore.googleapis.com https://www.googleapis.com; media-src 'self' blob:; worker-src 'self';">
 </head>
 <body>
 
@@ -1185,7 +1261,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
 <!-- ████ SPLASH ████ -->
 <div class="screen active" id="s-splash">
   <div class="splash-logo">
-    <img src="logo.png" alt="CityCAR" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+    <img src="/app/logo.png" alt="CityCAR" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
     <div style="display:none;font-size:36px;font-weight:800;color:#fff;letter-spacing:-1px">City<span style="color:#67e8f9">CAR</span></div>
   </div>
   <div class="splash-tagline">Аренда авто · Воронеж</div>
@@ -1365,11 +1441,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
       <div class="setup-sub">Сфотографируйте страницы с фото и пропиской</div>
       <div class="upload-box" id="ubox-passport-main" onclick="realUpload('passport-main')">
         <div class="upload-icon">📷</div>
+<input type="file" id="file-input-passport-main" accept="image/*" capture="environment" style="display:none" onchange="handleFileSelected(this, 'passport-main')">
         <div class="upload-label">Главная страница</div>
         <div class="upload-hint">Разворот с фотографией (стр. 2–3)</div>
       </div>
       <div class="upload-box" id="ubox-passport-reg" onclick="realUpload('passport-reg')">
         <div class="upload-icon">📷</div>
+<input type="file" id="file-input-passport-reg" accept="image/*" capture="environment" style="display:none" onchange="handleFileSelected(this, 'passport-reg')">
         <div class="upload-label">Страница прописки</div>
         <div class="upload-hint">3–4 страница паспорта</div>
       </div>
@@ -1383,11 +1461,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
       <div class="setup-sub">Обе стороны. Стаж от 2 лет, возраст от 21 года, кат. B</div>
       <div class="upload-box" id="ubox-license-front" onclick="realUpload('license-front')">
         <div class="upload-icon">📷</div>
+<input type="file" id="file-input-license-front" accept="image/*" capture="environment" style="display:none" onchange="handleFileSelected(this, 'license-front')">
         <div class="upload-label">Лицевая сторона</div>
         <div class="upload-hint">С фотографией и данными</div>
       </div>
       <div class="upload-box" id="ubox-license-back" onclick="realUpload('license-back')">
         <div class="upload-icon">📷</div>
+<input type="file" id="file-input-license-back" accept="image/*" capture="environment" style="display:none" onchange="handleFileSelected(this, 'license-back')">
         <div class="upload-label">Обратная сторона</div>
         <div class="upload-hint">С категориями и датой выдачи</div>
       </div>
@@ -1875,12 +1955,15 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
           </div>
         </div>
 
-        <!-- История -->
+        <!-- Штрафы -->
         <div class="menu-group">
-          <div class="menu-group-title">ИСТОРИЯ</div>
-          <div class="menu-item" onclick="showHistorySheet()">
-            <div class="menu-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12,6 12,12 16,14"/></svg></div>
-            <div class="menu-text"><div class="menu-label">ИСТОРИЯ ПОЕЗДОК</div><div class="menu-sub">Все аренды и чеки</div></div>
+          <div class="menu-group-title">ШТРАФЫ</div>
+          <div class="menu-item" onclick="showFinesSheet()" id="menu-fines-item">
+            <div class="menu-icon" style="position:relative">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span id="fines-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#EF4444;border-radius:50%;border:2px solid var(--card)"></span>
+            </div>
+            <div class="menu-text"><div class="menu-label">ШТРАФЫ</div><div class="menu-sub" id="fines-menu-sub">Нет штрафов</div></div>
             <span class="menu-arrow">›</span>
           </div>
         </div>
@@ -1939,9 +2022,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
             <div class="menu-text"><div class="menu-label">WHATSAPP</div><div class="menu-sub">8 (993) 597-63-00</div></div>
             <span class="menu-arrow">›</span>
           </div>
-          <div class="menu-item" onclick="window.open('tel:88001015049')">
+          <div class="menu-item" onclick="window.open('tel:+79935976300')">
             <div class="menu-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg></div>
-            <div class="menu-text"><div class="menu-label">ПОЗВОНИТЬ</div><div class="menu-sub"><a href="tel:88001015049" style="color:inherit;text-decoration:none">8 800 101-50-49 · 24/7</a></div></div>
+            <div class="menu-text"><div class="menu-label">ПОЗВОНИТЬ</div><div class="menu-sub"><a href="tel:+79935976300" style="color:inherit;text-decoration:none">+7 (993) 597-63-00 · 24/7</a></div></div>
             <span class="menu-arrow">›</span>
           </div>
         </div>
@@ -2424,9 +2507,21 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg2);font-fami
     <button class="sheet-close-btn" onclick="closeSheet('sheet-history')" aria-label="Закрыть">✕</button>
     <div class="sheet-title">🕐 История поездок</div>
     <div id="history-content">
-      <div style="text-align:center;padding:40px;color:var(--text2)">Загрузка...</div>
+      <!-- Заполняется динамически через renderBookingHistory() -->
     </div>
     <button class="btn btn-ghost" onclick="closeSheet('sheet-history');openBookingWizard('tariff')" style="margin-top:8px">🚗 Новое бронирование</button>
+  </div>
+</div>
+
+<!-- Fines Sheet -->
+<div class="sheet-overlay" id="sheet-fines" onclick="closeSheet('sheet-fines')">
+  <div class="sheet" onclick="event.stopPropagation()" style="max-height:88vh;overflow-y:auto">
+    <div class="sheet-handle"></div>
+    <button class="sheet-close-btn" onclick="closeSheet('sheet-fines')" aria-label="Закрыть">✕</button>
+    <div class="sheet-title">⚠️ Штрафы</div>
+    <div id="fines-content" style="padding-bottom:8px">
+      <div style="text-align:center;padding:40px;color:var(--text2)">Загрузка...</div>
+    </div>
   </div>
 </div>
 
@@ -2738,9 +2833,9 @@ function showMyDocsSheet() {
 // ── ПРОСМОТР PDF ──
 function openDoc(slug) {
   const docs = {
-    dogovor: { title:'📋 Договор аренды ТС',           url:'https://citycar.opentgp.ru/docs/dogovor.pdf' },
-    pd:      { title:'🔒 Политика конфиденциальности', url:'https://citycar.opentgp.ru/docs/PD.pdf' },
-    pravila: { title:'🚗 Правила пользования',         url:'https://citycar.opentgp.ru/docs/dogovor.pdf' }
+    dogovor: { title:'📋 Договор аренды ТС',           url:'https://citycar.opentgp.ru/app/docs/dogovor.pdf' },
+    pd:      { title:'🔒 Политика конфиденциальности', url:'https://citycar.opentgp.ru/app/docs/PD.pdf' },
+    pravila: { title:'🚗 Правила пользования',         url:'https://citycar.opentgp.ru/app/docs/dogovor.pdf' }
   };
   const doc = docs[slug];
   if (!doc) return;
@@ -2773,24 +2868,25 @@ setTimeout(() => {
     window.history.replaceState({}, '', window.location.pathname);
     if (bId.startsWith('card_bind_')) {
       showToastMsg('💳', 'Карта привязана!', 'Теперь вы можете оплачивать бронирования');
-    } else {
-      showToastMsg('✅', 'Оплата прошла!', 'Заявка #' + bId.slice(-4).toUpperCase() + ' оплачена');
-    // Уведомить оператора об успешной оплате
-    setTimeout(() => {
-      const _sess = loadSession() || {};
-      const now = new Date().toLocaleString('ru-RU', {timeZone:'Europe/Moscow'});
-      sendTelegramMessage(TG_CHAT_OPERATOR,
+    } else if (bId) {
+      // Сохраняем bookingId в sessionStorage чтобы не потерять после перезагрузки
+      try { sessionStorage.setItem('citycar_paid_booking', bId); } catch(_) {}
+      // Уведомить оператора
+      setTimeout(() => {
+        const _sess = loadSession() || {};
+        const now = new Date().toLocaleString('ru-RU', {timeZone:'Europe/Moscow'});
+        sendTelegramMessage(TG_CHAT_OPERATOR,
 `💳 <b>ОПЛАТА ПОДТВЕРЖДЕНА — CityCAR</b>
 
 🆔 Заявка: <code>${bId}</code>
 👤 ${_sess.phone || '—'}
 🕐 ${now}`);
-    }, 1000);
-    } // end else (not card_bind)
+      }, 1000);
+    }
   } else if (urlParams.get('payment') === 'fail') {
-    const bId = urlParams.get('booking') || '';
     window.history.replaceState({}, '', window.location.pathname);
     showToastMsg('❌', 'Оплата не прошла', 'Попробуйте ещё раз или свяжитесь с оператором');
+    try { sessionStorage.removeItem('citycar_paid_booking'); } catch(_) {}
   }
 
   // Проверяем ссылку сброса пароля из email
@@ -2810,8 +2906,10 @@ setTimeout(() => {
     // Запускаем realtime listeners
     setTimeout(async () => {
       if (window.listenUserProfile) listenUserProfile(session.phone);
-      if (window.checkActiveRental) checkActiveRental();
-    }, 2500);
+      checkActiveRental();
+      // Грузим историю один раз при восстановлении сессии
+      preloadBookingHistory();
+    }, 500);
   } else {
     showScreen('s-auth');
   }
@@ -3084,9 +3182,10 @@ function enterApp(icon, title, msg) {
   if (icon) showToastMsg(icon, title, msg);
   setTimeout(() => applySessionToProfile(loadSession()), 100);
   setTimeout(async () => {
-    // listenUserProfile достаточно — startUserListener дублировал onSnapshot на тот же документ
     if (window.listenUserProfile) listenUserProfile(state.phone);
     if (window.checkActiveRental) checkActiveRental();
+    // Грузим историю один раз при входе
+    preloadBookingHistory();
   }, 2000);
   // Push запрашивается только по клику пользователя (кнопка в профиле)
   // Автоматический запрос заблокирован браузерами по требованиям безопасности
@@ -3125,6 +3224,9 @@ async function updateProfileStats() {
   const bonusEl = document.getElementById('stat-bonus');
   const kmEl    = document.getElementById('stat-km');
 
+  // Проверяем штрафы в фоне
+  if (phone) setTimeout(checkAndShowFinesBadge, 500);
+
   // Fallback на кэш из сессии
   const showCached = () => {
     if (tripsEl) tripsEl.textContent = sess.totalTrips || '0';
@@ -3135,96 +3237,34 @@ async function updateProfileStats() {
   if (!phone) { showCached(); return; }
   if (!window._firestoreDB) { showCached(); return; }
 
-  // Кэш: не более 1 запроса в 5 минут
-  const now = Date.now();
-  if (window._profileStatsLastFetch && (now - window._profileStatsLastFetch) < 300000) {
-    showCached();
-    return;
+  // Используем только уже загруженные данные — без дополнительных запросов к Firebase
+  // Бонусы: из onSnapshot кэша (обновляется в реальном времени)
+  const cached = window._cachedUserData;
+  let bonus     = (cached ? (cached.bonusPoints || 0) : 0) || sess.bonusPoints || 0;
+  let totalEver = (cached ? (cached.totalCoinsEarned || 0) : 0) || sess.totalCoinsEarned || bonus;
+
+  // Поездки: из кэша истории (загружается при входе)
+  let trips = 0, km = 0;
+  if (window._historyCache && window._historyCache.length > 0) {
+    window._historyCache.forEach(b => {
+      if (b.status === 'done' || b.status === 'finished') {
+        trips++;
+        km += Number(b.km || 0);
+      }
+    });
+  } else {
+    trips = sess.totalTrips || 0;
+    km    = sess.totalKm    || 0;
   }
-  window._profileStatsLastFetch = now;
 
-  try {
-    const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
-    const FB_PRJ = 'citycar-voronezh-3ed1b';
-    const qUrl = `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`;
+  if (tripsEl) tripsEl.textContent = trips;
+  if (bonusEl) bonusEl.textContent = bonus.toLocaleString('ru-RU') + ' 🪙';
+  if (kmEl)    kmEl.textContent    = km > 0 ? km.toLocaleString('ru-RU') + ' км' : '0 км';
 
-    // Запрос пользователя для бонусов
-    const userResp = await fetch(qUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        structuredQuery: {
-          from: [{ collectionId: 'users' }],
-          where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: phone } } },
-          limit: 1
-        }
-      })
-    });
-    let bonus     = sess.bonusPoints      || 0;
-    let totalEver = sess.totalCoinsEarned || bonus;
-    if (userResp.ok) {
-      const userData = await userResp.json();
-      if (userData[0] && userData[0].document) {
-        const fields = userData[0].document.fields || {};
-        const getNum = (k, def) => fields[k] ? Number(fields[k].integerValue ?? fields[k].doubleValue ?? def) : def;
-        bonus     = getNum('bonusPoints', bonus);
-        totalEver = getNum('totalCoinsEarned', bonus);
-        try {
-          const full = JSON.parse(localStorage.getItem('citycar_session') || '{}');
-          full.bonusPoints = bonus;
-          full.totalCoinsEarned = totalEver;
-          localStorage.setItem('citycar_session', JSON.stringify(full));
-        } catch(e) {}
-      }
-    }
-
-    // Запрос поездок
-    const bookingsResp = await fetch(qUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        structuredQuery: {
-          from: [{ collectionId: 'bookings' }],
-          where: {
-            compositeFilter: {
-              op: 'AND',
-              filters: [
-                { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: phone } } },
-                { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'done' } } }
-              ]
-            }
-          },
-          limit: 500
-        }
-      })
-    });
-    let trips = 0, km = 0;
-    if (bookingsResp.ok) {
-      const bData = await bookingsResp.json();
-      if (Array.isArray(bData)) {
-        bData.forEach(doc => {
-          if (doc.document) {
-            trips++;
-            const f = doc.document.fields || {};
-            km += f.km ? Number(f.km.integerValue || f.km.doubleValue || 0) : 0;
-          }
-        });
-      }
-    }
-
-    // Обновляем UI
-    if (tripsEl) tripsEl.textContent = trips;
-    if (bonusEl) bonusEl.textContent = bonus.toLocaleString('ru-RU') + ' 🪙';
-    if (kmEl)    kmEl.textContent    = km > 0 ? km.toLocaleString('ru-RU') + ' км' : '0 км';
-
-    if (typeof getLoyaltyLevel === 'function') {
-      const lvl = getLoyaltyLevel(totalEver);
-      const lvlEl = document.getElementById('profile-loyalty-badge');
-      if (lvlEl) { lvlEl.textContent = lvl.icon + ' ' + lvl.label; lvlEl.style.color = lvl.color; }
-    }
-  } catch(e) {
-    console.warn('updateProfileStats:', e);
-    showCached();
+  if (typeof getLoyaltyLevel === 'function') {
+    const lvl = getLoyaltyLevel(totalEver);
+    const lvlEl = document.getElementById('profile-loyalty-badge');
+    if (lvlEl) { lvlEl.textContent = lvl.icon + ' ' + lvl.label; lvlEl.style.color = lvl.color; }
   }
 }
 
@@ -3565,6 +3605,16 @@ function realUpload(type) {
 }
 
 function handleFileSelected(input, type) {
+  // Проверка для нативных приложений (Capacitor/Cordova)
+  if (!input || !input.files || input.files.length === 0) {
+    console.warn('[Upload] No file selected or input cleared');
+    // Попробуем получить файл из нативного плагина если доступен
+    if (window.Camera && navigator.camera) {
+      // Cordova Camera plugin fallback
+      return handleNativeCamera(type);
+    }
+    return;
+  }
   const file = input.files[0];
   if (!file) return;
   input.value = ''; // сбрасываем сразу — повторный выбор того же файла тоже сработает
@@ -3620,7 +3670,6 @@ async function uploadDocToFirebase(type, file) {
   const box = document.getElementById('ubox-' + type);
   if (!box) return;
 
-  // Сбрасываем input чтобы onchange сработал при повторном выборе того же файла
   const inp = document.getElementById('file-input-' + type);
   if (inp) inp.value = '';
 
@@ -3634,21 +3683,30 @@ async function uploadDocToFirebase(type, file) {
   try {
     const session = loadSession() || {};
     const phone = (session.phone || 'unknown').replace(/\D/g, '');
-    const ext = file.name.split('.').pop() || 'jpg';
-    const fileName = type + '_' + Date.now() + '.' + ext;
+    const ext = (file.name || 'photo').split('.').pop().replace(/heic|heif/i, 'jpg') || 'jpg';
+    const fileName = type + '_' + Date.now() + '.jpg';
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', file, fileName);
     formData.append('fileName', fileName);
     formData.append('phone', phone);
     formData.append('type', type);
 
-    const resp = await fetch('https://citycar-upload.aogoldenberg.workers.dev/', {
-      method: 'POST',
-      body: formData
-    });
+    // Таймаут 60 секунд — iOS на слабом соединении может долго загружать
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-    // Сначала проверяем HTTP статус, потом парсим JSON
+    let resp;
+    try {
+      resp = await fetch('https://citycar-upload.aogoldenberg.workers.dev/', {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     if (!resp.ok) {
       let errText = 'HTTP ' + resp.status;
       try { const t = await resp.text(); if (t) errText += ': ' + t.slice(0, 120); } catch(_) {}
@@ -3688,12 +3746,11 @@ async function uploadDocToFirebase(type, file) {
     showToastMsg('✅', 'Фото загружено', UPLOAD_LABELS[type]);
     checkAllUploaded();
 
-    // OCR запускается оператором вручную через CRM (избегаем таймаута Worker'а)
-
   } catch(e) {
-    // Определяем понятное сообщение об ошибке
     let errMsg = e.message || 'Неизвестная ошибка';
-    if (errMsg === 'Failed to fetch' || errMsg === 'Load failed' || errMsg === 'NetworkError when attempting to fetch resource.') {
+    if (e.name === 'AbortError') {
+      errMsg = 'Время ожидания истекло. Проверьте интернет и попробуйте снова.';
+    } else if (errMsg === 'Failed to fetch' || errMsg === 'Load failed' || errMsg.includes('NetworkError')) {
       errMsg = 'Нет соединения с сервером. Проверьте интернет и попробуйте снова.';
     }
 
@@ -3839,28 +3896,46 @@ window._fleetData = [];
 let _fleetData = window._fleetData;
 let _fleetFilter = 'all';
 
-// Загружаем автопарк из Firestore, fallback на дефолт (кэш 5 мин)
+// Загружаем автопарк из Firestore (запускает onSnapshot через startFleetListener)
 async function loadFleetCatalog() {
   try {
-    const now = Date.now();
-    if (window._fleetCatalogFetched && (now - window._fleetCatalogFetched) < 300000 && window._fleetData && window._fleetData.length) {
+    // Дополнительное ожидание db на случай если вызов пришёл рано
+    let db = window._firestoreDB;
+    if (!db) {
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        db = window._firestoreDB;
+        if (db) break;
+      }
+    }
+    if (!db) throw new Error('no db');
+
+    // Если данные уже пришли через onSnapshot — сразу рендерим
+    if (window._fleetData && window._fleetData.length > 0) {
+      _fleetData = window._fleetData;
       renderFleetTab(); renderBookingCars(); renderMapCarsStrip();
       if (typeof refreshMapPlacemarks === 'function') setTimeout(refreshMapPlacemarks, 100);
+      _hideSplashAndStart();
       return;
     }
-    window._fleetCatalogFetched = now;
+
+    // Делаем первый быстрый getDocs чтобы не ждать onSnapshot
     const { collection: col, getDocs } =
       await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-    const db = window._firestoreDB;
-    if (!db) throw new Error('no db');
     const snap = await getDocs(col(db, 'fleet'));
-    if (snap.empty) throw new Error('empty');
-    window._fleetData = [];
-    snap.forEach(d => window._fleetData.push({ id: d.id, ...d.data() }));
-    _fleetData = window._fleetData;
+    if (!snap.empty) {
+      window._fleetData = [];
+      snap.forEach(d => window._fleetData.push({ id: d.id, ...d.data() }));
+      _fleetData = window._fleetData;
+    }
+    // Если в Firebase пусто — оставляем пустой массив (не показываем хардкод)
   } catch(e) {
-    window._fleetData = FLEET_DEFAULT;
-    _fleetData = window._fleetData;
+    console.warn('[Fleet] loadFleetCatalog:', e.message);
+    // При ошибке сети — оставляем что было, не затираем хардкодом
+    if (!window._fleetData || !window._fleetData.length) {
+      window._fleetData = [];
+      _fleetData = [];
+    }
   }
   renderFleetTab();
   renderBookingCars();
@@ -3892,7 +3967,7 @@ function _hideSplashAndStart() {
       setTimeout(() => {
         // Единственный слушатель профиля — listenUserProfile (startUserListener дублировал)
         if (window.listenUserProfile) window.listenUserProfile(session.phone);
-        if (window._firestoreDB) checkActiveRental();
+        checkActiveRental();
       }, 500);
     } else {
       showScreen('s-auth');
@@ -3993,21 +4068,26 @@ function selectCarAndRoute(carId) {
 
 // Загружаем при старте
 window.addEventListener('DOMContentLoaded', () => {
-  // Страховка — уходим со сплэша через 6 сек в любом случае
-  setTimeout(() => { _hideSplashAndStart(); }, 6000);
+  // Страховка — уходим со сплэша через 8 сек в любом случае
+  setTimeout(() => { _hideSplashAndStart(); }, 8000);
 
   // Ждём пока Firebase-модуль установит window._firestoreDB
-  // (он в type="module" — выполняется асинхронно после парсинга)
+  // type="module" выполняется асинхронно — даём до 5 секунд (50 попыток × 100мс)
   let attempts = 0;
   const waitForFirebase = setInterval(() => {
     attempts++;
     if (window._firestoreDB) {
+      // Firebase готов — запускаем
       clearInterval(waitForFirebase);
       loadFleetCatalog();
-    } else if (attempts >= 20) {
-      // 2 секунды прошло — Firebase не ответил, грузим без него
+      // Запускаем realtime слушатель автопарка
+      if (window.startFleetListener) window.startFleetListener();
+    } else if (attempts >= 50) {
+      // 5 секунд прошло — Firebase так и не поднялся, показываем пустой список
       clearInterval(waitForFirebase);
-      loadFleetCatalog();
+      console.warn('[Firebase] _firestoreDB не готов после 5 сек');
+      window._fleetData = [];
+      _hideSplashAndStart();
     }
   }, 100);
 });
@@ -4138,27 +4218,44 @@ function initBookDateLimits() {
     ? window._fleetData.find(c => c.name === carName) : null;
 
   const availFrom = carData ? carAvailableFrom(carData) : null;
-  // Минимальная дата — либо окончание блокировки авто, либо прямо сейчас
   const minDt = availFrom && availFrom > new Date()
     ? availFrom
     : new Date();
 
   const minDateStr = minDt.getFullYear()+'-'+pad(minDt.getMonth()+1)+'-'+pad(minDt.getDate());
-  dateEl.min   = minDateStr;
+  dateEl.min = minDateStr;
 
-  // Подставляем текущую дату и текущее время (+1 мин) по умолчанию
+  // Сегодня — максимальная дата тоже сегодня (не даём выбрать завтра)
   const now = new Date();
   const nowDateStr = now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+  // Если авто свободен сейчас — ограничиваем только сегодняшней датой
+  if (!availFrom || availFrom <= now) {
+    dateEl.max = nowDateStr;
+  } else {
+    // Авто занят — max = дата когда освободится
+    const availDateStr = availFrom.getFullYear()+'-'+pad(availFrom.getMonth()+1)+'-'+pad(availFrom.getDate());
+    dateEl.max = availDateStr;
+  }
+
+  // Подставляем текущую дату и время (+1 мин) по умолчанию
   const defaultDt = minDt > now ? minDt : new Date(now.getTime() + 60000);
   const defaultDateStr = defaultDt.getFullYear()+'-'+pad(defaultDt.getMonth()+1)+'-'+pad(defaultDt.getDate());
   dateEl.value = defaultDateStr;
+
   if (timeEl) {
+    // Минимум: сейчас +1 мин
+    const minTime = new Date(now.getTime() + 60000);
+    // Максимум: сейчас +30 мин
+    const maxTime = new Date(now.getTime() + 30 * 60000);
+
     timeEl.value = pad(defaultDt.getHours())+':'+pad(defaultDt.getMinutes());
-    // Установить минимальное время если дата — сегодня
+
     if (defaultDateStr === nowDateStr) {
-      timeEl.min = pad(defaultDt.getHours())+':'+pad(defaultDt.getMinutes());
+      timeEl.min = pad(minTime.getHours())+':'+pad(minTime.getMinutes());
+      timeEl.max = pad(maxTime.getHours())+':'+pad(maxTime.getMinutes());
     } else {
       timeEl.min = '00:00';
+      timeEl.max = '23:59';
     }
   }
 
@@ -4176,6 +4273,17 @@ function initBookDateLimits() {
   } else if (hintEl) {
     hintEl.style.display = 'none';
   }
+
+  // Показываем подсказку об ограничении времени
+  let timeHintEl = document.getElementById('book-time-hint');
+  if (!timeHintEl) {
+    timeHintEl = document.createElement('div');
+    timeHintEl.id = 'book-time-hint';
+    timeHintEl.style.cssText = 'font-size:12px;color:var(--text3);padding:4px 10px;margin-top:4px;text-align:center';
+    const timeParent = timeEl ? timeEl.parentNode.parentNode : null;
+    if (timeParent) timeParent.insertAdjacentElement('afterend', timeHintEl);
+  }
+  if (timeHintEl) timeHintEl.textContent = '⏱ Старт аренды — от 1 до 30 минут от сейчас';
 }
 
 function onBookDateChange() {
@@ -4186,16 +4294,18 @@ function onBookDateChange() {
   const pad = n => String(n).padStart(2,'0');
   const todayStr = today.getFullYear()+'-'+pad(today.getMonth()+1)+'-'+pad(today.getDate());
   if (dateEl.value === todayStr) {
-    const minTime = new Date(today.getTime() + 1*60000); // минимум 1 минута
+    const minTime = new Date(today.getTime() + 1*60000);
+    const maxTime = new Date(today.getTime() + 30*60000);
     timeEl.min = pad(minTime.getHours())+':'+pad(minTime.getMinutes());
+    timeEl.max = pad(maxTime.getHours())+':'+pad(maxTime.getMinutes());
     if (timeEl.value && timeEl.value < timeEl.min) timeEl.value = '';
+    if (timeEl.value && timeEl.value > timeEl.max) timeEl.value = pad(maxTime.getHours())+':'+pad(maxTime.getMinutes());
   } else {
     timeEl.min = '00:00';
+    timeEl.max = '23:59';
   }
-  // Скрываем старый статус при смене даты — ждём выбора времени
   const statusEl = document.getElementById('avail-status');
   if (statusEl) statusEl.textContent = '';
-  // Если время уже выбрано — сразу проверяем
   if (timeEl.value) checkAndShowAvailability();
 }
 
@@ -4305,8 +4415,8 @@ function switchTab(t){
     setTimeout(function(){ if (typeof loadTariffsForCalc === 'function') loadTariffsForCalc(); }, 100);
   }
   if (t === 'booking') {
-    // Теперь booking = история броней, без wizard
-    setTimeout(function(){ if (typeof renderBookingHistory === 'function') renderBookingHistory(); }, 100);
+    // Рендер всегда из кэша — без запроса к Firebase
+    if (typeof renderBookingHistory === 'function') renderBookingHistory();
   }
   // Фикс бага: сбрасываем позицию bottom-nav при переключении вкладок
   const nav = document.querySelector('.bottom-nav');
@@ -4400,10 +4510,12 @@ function selectBookingTariff(idx) {
     if (el) el.classList.toggle('selected', i === idx);
   });
 
-  state.basePrice     = t.price;
+  state.basePrice      = t.price;
   state.selectedTariff = t.name;
   state.tarif          = t.name;
-  state._tariffKmBase  = t.km || 0; // базовый лимит км тарифа
+  state._tariffKmBase  = t.km || 0;
+  // Сохраняем длительность тарифа в минутах
+  state.durationMin    = t.hours ? Math.round(t.hours * 60) : (t.minutes || null);
 
   updateBookingKmSlider();
   updateBookingTotal();
@@ -4531,8 +4643,16 @@ function bNext(page) {
     if (!d) { showToastMsg('📅','Укажите дату','Выберите дату начала аренды'); return; }
     if (!t) { showToastMsg('🕐','Укажите время','Выберите время начала аренды'); return; }
     const chosen = new Date(d + 'T' + t);
-    if (chosen < new Date(Date.now() - 60000)) {
+    const nowMs = Date.now();
+    if (chosen < new Date(nowMs - 60000)) {
       showToastMsg('⏰','Некорректное время','Нельзя выбрать время в прошлом');
+      return;
+    }
+    // Проверяем: не более +30 мин от текущего момента (только для сегодняшней даты)
+    const todayCheck = new Date();
+    const todayStrCheck = todayCheck.getFullYear()+'-'+(todayCheck.getMonth()+1).toString().padStart(2,'0')+'-'+todayCheck.getDate().toString().padStart(2,'0');
+    if (d === todayStrCheck && chosen > new Date(nowMs + 31 * 60000)) {
+      showToastMsg('⏱','Слишком далеко','Выберите время старта не позже чем через 30 минут');
       return;
     }
     const carData = state.selectedCar && window._fleetData
@@ -4562,9 +4682,6 @@ function bNext(page) {
     if (sumTariff) sumTariff.textContent = state.selectedTariff || state.tarif || '—';
     if (sumDate)   sumDate.textContent   = dFmt + ' ' + t;
     if (sumTotal)  sumTotal.textContent  = total.toLocaleString('ru-RU') + ' ₽';
-    // Сбрасываем кнопку оплаты — пользователь мог вернуться назад
-    const payBtnReset = document.getElementById('btn-pay-booking');
-    if (payBtnReset) { payBtnReset.disabled = false; payBtnReset.textContent = '💳 Оплатить бронирование'; }
     if (typeof initCoinsPayBlock === 'function') initCoinsPayBlock();
     const sub = document.getElementById('wizard-subtitle');
     if (sub) sub.textContent = 'Шаг 4 — оплата';
@@ -4617,6 +4734,10 @@ function sendTelegramMessage(chatId, text) {
 }
 
 async function confirmBooking(){
+  // Проверяем наличие неоплаченных штрафов
+  const finesOk = await checkFinesBeforeBooking();
+  if (!finesOk) return;
+
   const kmCost = (_bookingKmExtra || 0) * 10;
   const isMinuteConfirm = state.tariffType === 'minute';
   const baseConfirm = isMinuteConfirm ? (state.estimateAmount || 0) : (state.basePrice || 0);
@@ -4670,6 +4791,9 @@ async function confirmBooking(){
     depositAmount:   isMinuteTariff ? (state.depositAmount || 480) : null,
     estimateAmount:  isMinuteTariff ? (state.estimateAmount || null) : null,
     estimateMinutes: isMinuteTariff ? (state.estimateMinutes || null) : null,
+    durationMin:     isMinuteTariff
+      ? (state.estimateMinutes || null)
+      : (state.durationMin || null),
     carId: (window._fleetData||[]).find(c=>c.name===car)?.id || null
   };
 
@@ -4827,11 +4951,89 @@ function resetBooking(){
 }
 
 // ── ИСТОРИЯ БРОНЕЙ ──────────────────────────────────────────────────────────
-async function renderBookingHistory() {
+// ── История броней: один запрос при старте, кэш в памяти на всю сессию ──────
+// Повторный запрос делается ТОЛЬКО если явно вызвать refreshBookingHistory()
+// (например после завершения поездки). Это исключает лишние чтения Firebase.
+
+async function _fetchAndCacheHistory(phone) {
+  const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
+  const FB_PRJ = 'citycar-voronezh-3ed1b';
+  // orderBy убран — требует составной индекс в Firestore, без него даёт 400.
+  // Сортировка делается на клиенте ниже.
+  const resp = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ structuredQuery: {
+        from: [{ collectionId: 'bookings' }],
+        where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: phone } } },
+        limit: 50
+      }})
+    }
+  );
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  const results = await resp.json();
+  const bookings = (results || [])
+    .filter(r => r.document)
+    .map(r => {
+      const f = r.document.fields || {};
+      // Добавлен timestampValue — serverTimestamp() возвращает именно его
+      const get = (k) => f[k]?.stringValue || f[k]?.integerValue || f[k]?.booleanValue || f[k]?.timestampValue || '';
+      return {
+        id:           r.document.name.split('/').pop(),
+        car:          get('car'),
+        tarif:        get('tarif'),
+        date:         get('dateStr') || get('date'),
+        time:         get('time'),
+        total:        get('total'),
+        status:       get('status'),
+        createdAt:    get('createdAt') || get('createdAtStr'),
+        createdAtStr: get('createdAtStr')
+      };
+    })
+    .sort((a, b) => {
+      const da = a.createdAt ? new Date(a.createdAt) : new Date(0);
+      const db = b.createdAt ? new Date(b.createdAt) : new Date(0);
+      return db - da;
+    });
+  window._historyCache = bookings;
+  window._historyCacheLoaded = true;
+  return bookings;
+}
+
+// Вызывается один раз при старте приложения (после логина / DOMContentLoaded)
+async function preloadBookingHistory() {
+  const sess = loadSession();
+  const phone = sess?.phone;
+  if (!phone || window._historyCacheLoaded) return;
+  try {
+    await _fetchAndCacheHistory(phone);
+  } catch(e) {
+    console.warn('[История] preload:', e.message);
+    // Даже при ошибке помечаем кэш загруженным — чтобы экран не завис вечно
+    window._historyCache = [];
+    window._historyCacheLoaded = true;
+  }
+}
+
+// Явный сброс кэша + перезагрузка — только после поездки
+async function refreshBookingHistory() {
+  window._historyCache = null;
+  window._historyCacheLoaded = false;
+  const sess = loadSession();
+  const phone = sess?.phone;
+  if (!phone) return;
+  try { await _fetchAndCacheHistory(phone); } catch(e) { console.warn('[История] refresh:', e.message); }
+  // Перерисовываем если вкладка открыта
+  renderBookingHistory();
+}
+
+// Рендер — всегда из кэша, никогда не делает запрос сам
+function renderBookingHistory() {
   const sess = loadSession();
   const phone = sess?.phone;
   const container = document.getElementById('booking-history-list');
-  const empty     = document.getElementById('booking-history-empty');
   const altCont   = document.getElementById('history-content');
   const target = container || altCont;
   if (!target) return;
@@ -4840,77 +5042,22 @@ async function renderBookingHistory() {
     target.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text2)"><div style="font-size:48px;margin-bottom:12px">🔐</div><div style="font-size:15px;font-weight:600">Войдите в аккаунт</div></div>';
     return;
   }
-  if (!window._firestoreDB) {
-    // Счётчик попыток — чтобы не висеть вечно
-    window._historyRetries = (window._historyRetries || 0) + 1;
-    if (window._historyRetries > 6) {
-      // После 6 попыток (~9 сек) показываем ошибку с кнопкой повторить
-      window._historyRetries = 0;
-      target.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text2)"><div style="font-size:48px;margin-bottom:12px">⚠️</div><div style="font-size:15px;font-weight:600;margin-bottom:6px">Нет соединения</div><div style="font-size:13px;color:var(--text3);margin-bottom:16px">Проверьте интернет и повторите</div><button class="btn btn-ghost" style="max-width:200px" onclick="window._historyRetries=0;renderBookingHistory()">🔄 Повторить</button></div>';
-      return;
+
+  if (!window._historyCacheLoaded) {
+    // Кэш ещё не загружен — показываем загрузку и ждём preload
+    target.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)">⏳ Загрузка истории...</div>';
+    // Если preload почему-то не запустился — запускаем вручную
+    if (!window._historyPreloading) {
+      window._historyPreloading = true;
+      preloadBookingHistory()
+        .then(() => { renderBookingHistory(); })
+        .catch(() => { renderBookingHistory(); })
+        .finally(() => { window._historyPreloading = false; });
     }
-    target.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)">⏳ Загрузка...</div>';
-    setTimeout(() => renderBookingHistory(), 1500);
     return;
   }
-  window._historyRetries = 0;
 
-  // Кэш: не более 1 запроса в 2 минуты (история не меняется каждую секунду)
-  const now = Date.now();
-  if (window._historyLastFetch && (now - window._historyLastFetch) < 120000 && window._historyCache) {
-    _renderHistoryFromCache(window._historyCache, target, empty);
-    return;
-  }
-  window._historyLastFetch = now;
-  target.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)">⏳ Загрузка истории...</div>';
-
-  try {
-    const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
-    const FB_PRJ = 'citycar-voronezh-3ed1b';
-    const resp = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ structuredQuery: {
-          from: [{ collectionId: 'bookings' }],
-          where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: phone } } },
-          limit: 50
-        }})
-      }
-    );
-    if (!resp.ok) throw new Error('Ошибка сервера: ' + resp.status);
-    const results = await resp.json();
-    const bookings = (results || [])
-      .filter(r => r.document)
-      .map(r => {
-        const f = r.document.fields || {};
-        const get = (k) => f[k]?.stringValue || f[k]?.integerValue || f[k]?.booleanValue || '';
-        return {
-          id:           r.document.name.split('/').pop(),
-          car:          get('car'),
-          tarif:        get('tarif'),
-          date:         get('dateStr') || get('date'),
-          time:         get('time'),
-          total:        get('total'),
-          status:       get('status'),
-          createdAt:    get('createdAt') || get('createdAtStr'),
-          createdAtStr: get('createdAtStr')
-        };
-      })
-      .sort((a, b) => {
-        const da = a.createdAt ? new Date(a.createdAt) : new Date(0);
-        const db = b.createdAt ? new Date(b.createdAt) : new Date(0);
-        return db - da;
-      });
-
-    window._historyCache = bookings; // сохраняем в кэш
-    _renderHistoryFromCache(bookings, target, empty);
-  } catch(e) {
-    window._historyLastFetch = 0; // сбрасываем кэш при ошибке, чтобы следующий вызов повторил
-    console.warn('[История броней]', e.message);
-    target.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text2)"><div style="font-size:48px;margin-bottom:12px">⚠️</div><div style="font-size:15px;font-weight:600;margin-bottom:6px">Ошибка загрузки</div><div style="font-size:13px;color:var(--text3);margin-bottom:16px">${e.message||'Проверьте соединение'}</div><button class="btn btn-ghost" style="max-width:200px" onclick="renderBookingHistory()">🔄 Повторить</button></div>`;
-  }
+  _renderHistoryFromCache(window._historyCache || [], target, null);
 }
 
 function _renderHistoryFromCache(bookings, target, empty) {
@@ -5604,6 +5751,168 @@ function openCarSheet(car) {
 }
 function showDocsSheet(){openSheet('sheet-docs')}
 function showCardsSheet(){openSheet('sheet-cards')}
+
+// ─── ШТРАФЫ ──────────────────────────────────────────────────────────────────
+async function showFinesSheet() {
+  openSheet('sheet-fines');
+  const cont = document.getElementById('fines-content');
+  if (cont) cont.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)">⏳ Загрузка...</div>';
+  await loadFines();
+}
+
+async function loadFines() {
+  const sess = loadSession();
+  if (!sess || !sess.phone) return;
+  const cont = document.getElementById('fines-content');
+  if (!cont) return;
+
+  try {
+    const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
+    const FB_PRJ = 'citycar-voronezh-3ed1b';
+
+    // Ищем пользователя по телефону
+    const qResp = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'users' }],
+            where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: sess.phone } } },
+            limit: 1
+          }
+        })
+      }
+    );
+    const qData = await qResp.json();
+    if (!qData[0] || !qData[0].document) {
+      cont.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)">Нет данных</div>';
+      return;
+    }
+
+    const fields = qData[0].document.fields || {};
+    // Штрафы хранятся как массив в поле penalties
+    const penaltiesField = fields.penalties;
+    let fines = [];
+    if (penaltiesField && penaltiesField.arrayValue && penaltiesField.arrayValue.values) {
+      fines = penaltiesField.arrayValue.values.map(v => {
+        const m = v.mapValue ? v.mapValue.fields : {};
+        return {
+          date:    m.date    ? (m.date.stringValue    || '') : '',
+          amount:  m.amount  ? (Number(m.amount.integerValue || m.amount.doubleValue || 0)) : 0,
+          reason:  m.reason  ? (m.reason.stringValue  || '') : '',
+          paid:    m.paid    ? (m.paid.booleanValue    || false) : false,
+          bookingId: m.bookingId ? (m.bookingId.stringValue || '') : ''
+        };
+      });
+    }
+
+    const unpaid = fines.filter(f => !f.paid);
+    const paid   = fines.filter(f => f.paid);
+    const totalUnpaid = unpaid.reduce((s, f) => s + f.amount, 0);
+
+    // Обновляем бейдж и подпись в меню
+    const badge   = document.getElementById('fines-badge');
+    const menuSub = document.getElementById('fines-menu-sub');
+    if (badge)   badge.style.display   = unpaid.length > 0 ? 'block' : 'none';
+    if (menuSub) menuSub.textContent   = unpaid.length > 0
+      ? unpaid.length + ' неоплаченных · ' + totalUnpaid.toLocaleString('ru-RU') + ' ₽'
+      : 'Нет штрафов';
+
+    if (fines.length === 0) {
+      cont.innerHTML = `<div style="text-align:center;padding:40px 20px">
+        <div style="font-size:48px;margin-bottom:12px">✅</div>
+        <div style="font-size:16px;font-weight:600;margin-bottom:6px">Штрафов нет</div>
+        <div style="font-size:13px;color:var(--text2)">Нарушений не зафиксировано</div>
+      </div>`;
+      return;
+    }
+
+    let html = '';
+
+    if (unpaid.length > 0) {
+      html += `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:4px">⚠️ Неоплаченные штрафы: ${totalUnpaid.toLocaleString('ru-RU')} ₽</div>
+        <div style="font-size:12px;color:var(--text2)">Необходимо погасить перед следующей арендой</div>
+      </div>`;
+      unpaid.forEach(f => {
+        html += _renderFineCard(f, false);
+      });
+    }
+
+    if (paid.length > 0) {
+      html += `<div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;padding:0 4px">Оплачено</div>`;
+      paid.forEach(f => {
+        html += _renderFineCard(f, true);
+      });
+    }
+
+    cont.innerHTML = html;
+  } catch(e) {
+    console.warn('[Штрафы]', e);
+    const cont2 = document.getElementById('fines-content');
+    if (cont2) cont2.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text2)">
+      <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:6px">Ошибка загрузки</div>
+      <button class="btn btn-ghost" style="margin-top:12px;max-width:200px" onclick="loadFines()">🔄 Повторить</button>
+    </div>`;
+  }
+}
+
+function _renderFineCard(f, isPaid) {
+  const color  = isPaid ? 'var(--green)' : 'var(--red)';
+  const status = isPaid ? '✅ Оплачен' : '❌ Не оплачен';
+  return `<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+      <div style="font-size:15px;font-weight:600">${f.reason || 'Штраф'}</div>
+      <div style="font-size:15px;font-weight:700;color:${color}">${f.amount.toLocaleString('ru-RU')} ₽</div>
+    </div>
+    ${f.date ? `<div style="font-size:12px;color:var(--text3);margin-bottom:4px">📅 ${f.date}</div>` : ''}
+    ${f.bookingId ? `<div style="font-size:12px;color:var(--text3);margin-bottom:4px">🆔 Аренда: #${f.bookingId.slice(-4).toUpperCase()}</div>` : ''}
+    <div style="font-size:12px;font-weight:600;color:${color}">${status}</div>
+  </div>`;
+}
+
+// Проверяем штрафы при загрузке профиля
+async function checkAndShowFinesBadge() {
+  const sess = loadSession();
+  if (!sess || !sess.phone) return;
+  try {
+    // Используем кэш из onSnapshot — без запроса к Firebase
+    const cached = window._cachedUserData;
+    if (!cached) return; // данные ещё не загружены — пропускаем
+    const pf = cached.penalties;
+    // _cachedUserData — это snap.data(), массив уже распакован Firebase SDK
+    if (!pf || !Array.isArray(pf)) return;
+    const unpaidCount = pf.filter(v => !v.paid).length;
+    const badge = document.getElementById('fines-badge');
+    const menuSub = document.getElementById('fines-menu-sub');
+    if (badge) badge.style.display = unpaidCount > 0 ? 'block' : 'none';
+    if (menuSub) menuSub.textContent = unpaidCount > 0 ? unpaidCount + ' неоплаченных' : 'Нет штрафов';
+  } catch(e) { console.warn('[FinesBadge]', e); }
+}
+
+// Блокировка бронирования если есть неоплаченные штрафы
+async function checkFinesBeforeBooking() {
+  const sess = loadSession();
+  if (!sess || !sess.phone) return true;
+  try {
+    // Используем кэш из onSnapshot — без запроса к Firebase
+    const cached = window._cachedUserData;
+    if (!cached) return true; // нет данных — не блокируем
+    const pf = cached.penalties;
+    if (!pf || !Array.isArray(pf)) return true;
+    const unpaid = pf.filter(v => !v.paid);
+    if (unpaid.length > 0) {
+      const total = unpaid.reduce((s, v) => s + Number(v.amount || 0), 0);
+      showToastMsg('⚠️', 'Есть неоплаченные штрафы', 'Погасите ' + total.toLocaleString('ru-RU') + ' ₽ перед бронированием');
+      setTimeout(() => showFinesSheet(), 1500);
+      return false; // блокируем
+    }
+    return true;
+  } catch(e) { return true; } // при ошибке не блокируем
+}
 // ─── CITYCOINS: конфигурация уровней лояльности ─────────────────────────────
 window.LOYALTY_LEVELS = [
   { id:'new',      label:'Новый',     min:0,     max:999,    discount:0,  deposit:10000, icon:'⚪', color:'#9AA0B0' },
@@ -5724,7 +6033,7 @@ function showBonusSheet() {
           _bonusRuleRow('🔥', '5 поездок за месяц', '+300 🪙') +
           _bonusRuleRow('🏆', '10 поездок за месяц', '+800 🪙') +
           _bonusRuleRow('🕊️', '5 поездок подряд без штрафов', '+200 🪙') +
-          _bonusRuleRow('⭐', 'Первая аренда', '+200 🪙') +
+          _bonusRuleRow('⭐', 'При регистрации', '+200 🪙') +
           _bonusRuleRow('📅', 'Бронь за 24+ часа', '+30 🪙') +
           _bonusRuleRow('🎂', 'День рождения', '+150 🪙') +
           _bonusRuleRow('👥', 'Привели друга', '+500 🪙') +
@@ -5746,15 +6055,9 @@ function showBonusSheet() {
 }
 
 function showHistorySheet(){
-  window._historyRetries = 0; // сбрасываем счётчик при каждом открытии
   openSheet('sheet-history');
-  setTimeout(() => {
-    renderBookingHistory().catch(e => {
-      console.error('[showHistorySheet]', e);
-      const cont = document.getElementById('booking-history-list');
-      if (cont) cont.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text2)"><div style="font-size:40px;margin-bottom:12px">⚠️</div><div style="font-size:15px;font-weight:600;margin-bottom:6px">Ошибка загрузки</div><div style="font-size:13px">${e.message||'Попробуйте позже'}</div><button class="btn btn-ghost" style="margin-top:16px;max-width:200px" onclick="renderBookingHistory()">🔄 Повторить</button></div>`;
-    });
-  }, 300);
+  // Рендер из кэша — без запроса к Firebase
+  renderBookingHistory();
 }
 function showAddCard(){closeSheet('sheet-cards');openSheet('sheet-addcard')}
 
@@ -5906,13 +6209,15 @@ async function loadAndDrawZones() {
   drawZonePolygons(window._mapZones.freeZone, window._mapZones.surchargeZone);
   drawZoneLegend();
 
-  // Загружаем зоны один раз (они меняются редко — не нужен realtime)
+  // Подписываемся на realtime обновления зон из Firebase
   try {
-    const { doc, getDoc } =
+    const { doc, onSnapshot } =
       await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
     const zoneRef = doc(window._firestoreDB, 'config', 'mapZones');
-    const snap = await getDoc(zoneRef);
-    if (snap.exists()) {
+    // Отписываемся от предыдущего listener если был
+    if (window._zonesUnsubscribe) window._zonesUnsubscribe();
+    window._zonesUnsubscribe = onSnapshot(zoneRef, (snap) => {
+      if (!snap.exists()) return;
       const data = snap.data();
       function normalizeZone(arr) {
         if (!arr || arr.length < 3) return null;
@@ -5925,7 +6230,10 @@ async function loadAndDrawZones() {
       if (sz) window._mapZones.surchargeZone = sz;
       if (data.surchargeAmount) window._mapZones.surchargeAmount = data.surchargeAmount;
       drawZonePolygons(window._mapZones.freeZone, window._mapZones.surchargeZone);
-    }
+      drawZoneLegend();
+    }, (e) => {
+      console.warn('[Zones] Firebase ошибка:', e);
+    });
   } catch(e) {
     console.warn('[Zones] Firebase недоступен, используем зоны по умолчанию', e);
   }
@@ -6195,6 +6503,10 @@ window._currentInspectionSlot = null;
 function startRentalScreen(booking) {
   window._activeRental = booking;
   window._inspectionPhotos = {};
+  window._operatorFinishedHandled = false;
+  window._totalPauseMs = 0; // сброс паузы при старте новой аренды
+  window._rentalPaused = false;
+  window._pauseStartTime = null;
 
   // Заполняем шапку
   document.getElementById('rental-car-name').textContent   = booking.car || '—';
@@ -6204,9 +6516,11 @@ function startRentalScreen(booking) {
 
   // Время
   const startDT = booking.startedAt ? new Date(booking.startedAt) : new Date();
-  // paidUntil = startDT + длительность тарифа (в минутах)
-  const durationMin = booking.durationMin || 120; // по умолчанию 2 часа
-  const paidUntil   = booking.paidUntil
+  // durationMin: для поминутного тарифа — estimateMinutes, для пакетного — durationMin из Firebase
+  const durationMin = booking.tariffType === 'minute'
+    ? (booking.estimateMinutes || booking.durationMin || 60)
+    : (booking.durationMin || 120);
+  const paidUntil = booking.paidUntil
     ? new Date(booking.paidUntil)
     : new Date(startDT.getTime() + durationMin * 60000);
 
@@ -6250,15 +6564,20 @@ function updateRentalTimer() {
     const m = Math.floor((diffMs % 3600000) / 60000);
     const s = Math.floor((diffMs % 60000) / 1000);
     timerEl.textContent = pad(h)+':'+pad(m)+':'+pad(s);
-    labelEl.textContent = 'осталось оплаченного времени';
 
-    // Цвет таймера
-    timerEl.className = 'rental-timer';
-    if (diffMs < 5 * 60000)       timerEl.classList.add('danger');
-    else if (diffMs < 15 * 60000) timerEl.classList.add('warning');
+    if (window._rentalPaused) {
+      timerEl.className = 'rental-timer';
+      timerEl.style.color = 'var(--gold)';
+      labelEl.textContent = 'пауза активна · 4 ₽/мин';
+    } else {
+      timerEl.style.color = '';
+      labelEl.textContent = 'осталось оплаченного времени';
+      timerEl.className = 'rental-timer';
+      if (diffMs < 5 * 60000)       timerEl.classList.add('danger');
+      else if (diffMs < 15 * 60000) timerEl.classList.add('warning');
+    }
 
-    // Баннер предупреждения за 15 мин
-    warnBanner.style.display = diffMs < 15 * 60000 ? 'block' : 'none';
+    warnBanner.style.display = (!window._rentalPaused && diffMs < 15 * 60000) ? 'block' : 'none';
 
   } else {
     // Время вышло — идёт сверхурочно
@@ -6309,22 +6628,236 @@ function selectExtend(idx, min, price) {
   }
 }
 
-function confirmExtend() {
+async function confirmExtend() {
   closeSheet('sheet-extend');
   const { min, price } = window._extendChoice || { min:30, price:300 };
-  if (window._activeRental && window._activeRental.paidUntilDT) {
-    window._activeRental.paidUntilDT = new Date(window._activeRental.paidUntilDT.getTime() + min * 60000);
-    const pad = n => String(n).padStart(2,'0');
-    const newUntil = window._activeRental.paidUntilDT;
-    const timeStr = pad(newUntil.getHours()) + ':' + pad(newUntil.getMinutes());
-    document.getElementById('rental-end-time').textContent       = timeStr;
-    document.getElementById('rental-paid-until-text').textContent = timeStr;
-    showToastMsg('✅', 'Продлено!', 'Аренда продлена до ' + timeStr + ' · ' + price.toLocaleString('ru-RU') + ' ₽');
-    // TODO: реальное списание через Cloudflare Worker
+  const rental = window._activeRental;
+  if (!rental || !rental.paidUntilDT) return;
+
+  const bookingId = rental.id || '';
+  const phone = rental.phone || (loadSession()||{}).phone || '';
+
+  // rebillId берём из памяти, если нет — читаем свежий из Firebase
+  let rebillId = rental.rebillId || (loadSession()||{}).rebillId || '';
+  if (!rebillId && bookingId && window._firestoreDB) {
+    try {
+      const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDoc(doc(window._firestoreDB, 'bookings', bookingId));
+      if (snap.exists()) {
+        const bdata = snap.data();
+        rebillId = bdata.rebillId || '';
+        if (rebillId) rental.rebillId = rebillId;
+        if (!phone && bdata.phone) rental.phone = bdata.phone;
+      }
+    } catch(e) { console.warn('rebillId fetch:', e); }
+  }
+
+  if (!rebillId) {
+    showToastMsg('⚠️', 'Карта не привязана', 'Для продления необходима привязанная карта. Свяжитесь с оператором.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-confirm-extend');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Списываем...'; }
+
+  try {
+    const resp = await fetch(WORKER_URL + '/rebill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rebillId,
+        bookingId: bookingId,  // чистый id — Worker сам добавит суффикс для OrderId
+        amount: price,
+        phone: (rental.phone || (loadSession()||{}).phone || '').replace(/\D/g,''),
+        description: 'Продление аренды CityCar · ' + min + ' мин'
+      })
+    });
+    const result = await resp.json();
+
+    if (result.ok) {
+      rental.paidUntilDT = new Date(rental.paidUntilDT.getTime() + min * 60000);
+      const pad = n => String(n).padStart(2,'0');
+      const newUntil = rental.paidUntilDT;
+      const timeStr = pad(newUntil.getHours()) + ':' + pad(newUntil.getMinutes());
+      document.getElementById('rental-end-time').textContent        = timeStr;
+      document.getElementById('rental-paid-until-text').textContent = timeStr;
+      if (bookingId && window._firestoreDB) {
+        try {
+          const { doc, updateDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+          await updateDoc(doc(window._firestoreDB, 'bookings', bookingId), {
+            paidUntil: rental.paidUntilDT.toISOString(),
+            extendedAt: new Date().toISOString()
+          });
+        } catch(e) { console.warn('extend firebase:', e); }
+      }
+      showToastMsg('✅', 'Продлено!', 'Аренда продлена до ' + timeStr + ' · ' + price.toLocaleString('ru-RU') + ' ₽');
+    } else {
+      showToastMsg('❌', 'Ошибка оплаты', result.error || 'Не удалось списать средства. Проверьте карту.');
+    }
+  } catch(e) {
+    console.error('confirmExtend:', e);
+    showToastMsg('❌', 'Ошибка', 'Нет соединения с платёжным сервисом');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = price.toLocaleString('ru-RU') + ' ₽'; }
   }
 }
 
-// Свернуть / развернуть экран аренды
+
+// ─── ПАУЗА ───────────────────────────────────────
+window._rentalPaused = false;
+window._pauseStartTime = null;
+window._pauseRatePerMin = 4; // ₽/мин во время паузы
+window._totalPauseMs = 0;    // суммарное время всех пауз за поездку
+
+function toggleRentalPause() {
+  if (window._rentalPaused) {
+    resumeRental();
+  } else {
+    showPauseConfirm();
+  }
+}
+
+function showPauseConfirm() {
+  const rental = window._activeRental;
+  const normalRate = rental?.ratePerMin || 8.7;
+
+  let overlay = document.getElementById('pause-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'pause-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);display:flex;align-items:flex-end;justify-content:center;padding-bottom:env(safe-area-inset-bottom,0)';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div style="background:var(--card);border-radius:24px 24px 0 0;padding:28px 24px 36px;width:100%;max-width:500px;border-top:1px solid var(--border)">
+      <div style="text-align:center;margin-bottom:20px">
+        <div style="font-size:52px;margin-bottom:10px">⏸</div>
+        <div style="font-size:19px;font-weight:700;margin-bottom:8px">Поставить на паузу</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.7">
+          Авто ждёт вас — аренда не завершается.<br>
+          Тариф снизится с <b>${normalRate} ₽/мин</b> до <b>4 ₽/мин</b>.<br>
+          Максимальное время паузы — <b>12 часов</b>.
+        </div>
+      </div>
+      <div style="background:var(--card2);border-radius:12px;padding:12px 14px;margin-bottom:20px;font-size:13px;color:var(--text2)">
+        <div style="margin-bottom:6px">1. Нажмите «Поставить на паузу»</div>
+        <div style="margin-bottom:6px">2. Выйдите из авто, двери заблокируются</div>
+        <div>3. Для продолжения нажмите «Продолжить» — двери откроются</div>
+      </div>
+      <button onclick="activatePause()" style="width:100%;padding:15px;background:var(--blue);border:none;border-radius:14px;font-size:16px;font-weight:600;color:#fff;cursor:pointer;margin-bottom:10px">
+        ⏸ Поставить на паузу
+      </button>
+      <button onclick="document.getElementById('pause-overlay').style.display='none'" style="width:100%;padding:15px;background:var(--card2);border:1px solid var(--border);border-radius:14px;font-size:15px;font-weight:600;color:var(--text);cursor:pointer">
+        Отмена
+      </button>
+    </div>`;
+  overlay.style.display = 'flex';
+}
+
+function activatePause() {
+  window._rentalPaused = true;
+  window._pauseStartTime = new Date();
+  const overlay = document.getElementById('pause-overlay');
+  if (overlay) overlay.style.display = 'none';
+
+  const btn = document.getElementById('btn-rental-pause');
+  if (btn) {
+    btn.textContent = '▶️ Продолжить аренду';
+    btn.style.background = 'rgba(234,179,8,0.15)';
+    btn.style.borderColor = 'rgba(234,179,8,0.5)';
+    btn.style.color = 'var(--gold)';
+  }
+
+  // Показываем баннер паузы
+  let pauseBanner = document.getElementById('pause-banner');
+  if (!pauseBanner) {
+    pauseBanner = document.createElement('div');
+    pauseBanner.id = 'pause-banner';
+    pauseBanner.style.cssText = 'background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);border-radius:12px;padding:12px 16px;margin-top:12px;font-size:13px;color:var(--gold);text-align:center';
+    const warnBanner = document.getElementById('rental-warning-banner');
+    if (warnBanner && warnBanner.parentNode) warnBanner.parentNode.insertBefore(pauseBanner, warnBanner.nextSibling);
+  }
+  if (pauseBanner) {
+    pauseBanner.style.display = 'block';
+    pauseBanner.innerHTML = '⏸ <b>Пауза активна</b> · 4 ₽/мин · Нажмите «Продолжить» для возобновления';
+  }
+
+  const rental = window._activeRental || {};
+  sendTelegramMessage(TG_CHAT_OPERATOR,
+`⏸ <b>ПАУЗА — CityCAR</b>
+🚗 ${rental.car || '—'}
+🆔 ${rental.id || '—'}
+🕐 ${new Date().toLocaleString('ru-RU', {timeZone:'Europe/Moscow'})}`);
+
+  showToastMsg('⏸', 'Пауза активирована', 'Тариф снижен до 4 ₽/мин');
+}
+
+async function resumeRental() {
+  const pauseStart = window._pauseStartTime || new Date();
+  const pauseMs  = new Date() - pauseStart;
+  const pauseMin = Math.ceil(pauseMs / 60000);
+
+  window._rentalPaused   = false;
+  window._pauseStartTime = null;
+  // Накапливаем суммарное время паузы для финального расчёта
+  window._totalPauseMs = (window._totalPauseMs || 0) + pauseMs;
+
+  // Продлеваем paidUntilDT на время паузы — таймер «не стёк» пока стояли
+  if (window._activeRental && window._activeRental.paidUntilDT) {
+    window._activeRental.paidUntilDT = new Date(
+      window._activeRental.paidUntilDT.getTime() + pauseMs
+    );
+    // Обновляем отображение времени окончания
+    const pad = n => String(n).padStart(2,'0');
+    const newUntil = window._activeRental.paidUntilDT;
+    const timeStr  = pad(newUntil.getHours()) + ':' + pad(newUntil.getMinutes());
+    const endEl    = document.getElementById('rental-end-time');
+    const untilEl  = document.getElementById('rental-paid-until-text');
+    if (endEl)   endEl.textContent   = timeStr;
+    if (untilEl) untilEl.textContent = timeStr;
+
+    // Сохраняем новый paidUntil в Firebase
+    const rental = window._activeRental;
+    if (rental.id && window._firestoreDB) {
+      try {
+        const { doc, updateDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await updateDoc(doc(window._firestoreDB, 'bookings', rental.id), {
+          paidUntil: rental.paidUntilDT.toISOString()
+        });
+      } catch(e) { console.warn('pause paidUntil update:', e); }
+    }
+
+    // Возврат за паузу НЕ делаем здесь — он учитывается в финальном
+    // пересчёте при завершении аренды через _totalPauseMs.
+    // Промежуточный возврат при каждом снятии с паузы создаёт проблемы
+    // с балансом при множественных паузах за поездку.
+    const rental2 = window._activeRental;
+    if (rental2) {
+      console.log('[Пауза] Снята. Накоплено пауз:', Math.ceil((window._totalPauseMs||0) / 60000) + pauseMin, 'мин');
+    }
+  }
+
+  const btn = document.getElementById('btn-rental-pause');
+  if (btn) {
+    btn.textContent = '⏸ Пауза — поставить авто на стоп';
+    btn.style.background = 'var(--card)';
+    btn.style.borderColor = 'var(--border)';
+    btn.style.color = 'var(--text)';
+  }
+
+  const pauseBanner = document.getElementById('pause-banner');
+  if (pauseBanner) pauseBanner.style.display = 'none';
+
+  const rental3 = window._activeRental || {};
+  sendTelegramMessage(TG_CHAT_OPERATOR,
+`▶️ <b>ПРОДОЛЖЕНИЕ АРЕНДЫ — CityCAR</b>
+🚗 ${rental3.car || '—'}
+🆔 ${rental3.id || '—'}
+⏸ Пауза: ${pauseMin} мин
+🕐 ${new Date().toLocaleString('ru-RU', {timeZone:'Europe/Moscow'})}`);
+
+  showToastMsg('▶️', 'Аренда продолжена', 'Пауза была ' + pauseMin + ' мин');
+}
 function minimizeRental() {
   const screen = document.getElementById('screen-rental');
   const pill   = document.getElementById('rental-nav-pill');
@@ -6342,36 +6875,31 @@ function maximizeRental() {
 }
 
 function callOperator() {
-  showToastMsg('📞','Оператор','Звоните: +7 (993) 597-63-00');
-  // TODO: реальный номер телефона оператора
+  window.open('tel:+79935976300');
 }
 
 // ─── ОСМОТР ───────────────────────────────────────
 function startInspection() {
-  // ── ПРОВЕРКА ЗОНЫ ЗАВЕРШЕНИЯ ──────────────────────────────────
   var zone = getZoneForPoint(userCoords);
 
   if (zone === 'forbidden') {
-    // Нет геолокации — предупреждаем, но не блокируем полностью
     if (!userCoords) {
       showZoneWarning('unknown');
       return;
     }
+    // Красная зона: не блокируем, предлагаем позвонить оператору или всё равно завершить
     showZoneWarning('forbidden');
     return;
   }
 
   if (zone === 'surcharge') {
-    // Показываем предупреждение с подтверждением
     showZoneWarning('surcharge', function() {
-      // Сохраняем доплату за зону в данных аренды
       window._zoneSurcharge = window._mapZones.surchargeAmount;
       _proceedToInspection();
     });
     return;
   }
 
-  // zone === 'free' — всё ок
   window._zoneSurcharge = 0;
   _proceedToInspection();
 }
@@ -6403,10 +6931,25 @@ function showZoneWarning(type, onConfirm) {
       icon: '🚫',
       color: '#EF4444',
       title: 'Запрещённая зона',
-      text: 'Вы находитесь вне зоны разрешённого завершения аренды. Пожалуйста, переместите автомобиль в зелёную или жёлтую зону на карте.',
-      btn1: 'Понятно, смотреть карту',
-      btn2: null,
-      onConfirm: null
+      text: `Вы находитесь вне разрешённой зоны завершения аренды.<br><br>
+<b>Тарифы за завершение вне зоны:</b><br>
+до 1 км — <b>2 000 ₽</b><br>
+1–5 км — <b>5 000 ₽</b><br>
+5–20 км — <b>10 000 ₽</b> + возврат авто<br>
+20+ км — <b>20 000 ₽</b> + возврат авто<br><br>
+Доплата будет выставлена оператором.`,
+      btn1: 'Позвонить оператору',
+      btn2: 'Подтвердить завершение',
+      onConfirm: function() {
+        // Устанавливаем флаг — доплата выставляется оператором вручную
+        window._zoneSurcharge = 0;
+        window._zoneForbiddenConfirmed = true;
+        _proceedToInspection();
+      },
+      onBtn1: function() {
+        document.getElementById('zone-warning-overlay').style.display = 'none';
+        window.open('tel:+79935976300');
+      }
     },
     surcharge: {
       icon: '⚠️',
@@ -6441,15 +6984,20 @@ function showZoneWarning(type, onConfirm) {
         <div style="font-size:14px;color:var(--text2);line-height:1.6">${c.text}</div>
       </div>
       ${c.btn2 ? `
-      <button onclick="document.getElementById('zone-warning-overlay').style.display='none'" 
+      <button id="zone-btn1"
         style="width:100%;padding:14px;border-radius:14px;background:var(--card2);border:1px solid var(--border);
                font-size:15px;font-weight:600;color:var(--text);cursor:pointer;margin-bottom:10px">
         ${c.btn1}
       </button>
       <button id="zone-confirm-btn"
         style="width:100%;padding:14px;border-radius:14px;background:${c.color};border:none;
-               font-size:15px;font-weight:600;color:#fff;cursor:pointer">
+               font-size:15px;font-weight:600;color:#fff;cursor:pointer;margin-bottom:10px">
         ${c.btn2}
+      </button>
+      <button onclick="document.getElementById('zone-warning-overlay').style.display='none'"
+        style="width:100%;padding:12px;border-radius:14px;background:none;border:none;
+               font-size:14px;font-weight:500;color:var(--text3);cursor:pointer">
+        ← Вернуться к аренде
       </button>
       ` : `
       <button onclick="document.getElementById('zone-warning-overlay').style.display='none';switchTab('map')"
@@ -6462,11 +7010,20 @@ function showZoneWarning(type, onConfirm) {
   `;
   overlay.style.display = 'flex';
 
-  if (c.btn2 && c.onConfirm) {
-    document.getElementById('zone-confirm-btn').addEventListener('click', function() {
-      overlay.style.display = 'none';
-      c.onConfirm();
-    });
+  if (c.btn2) {
+    var btn1El = document.getElementById('zone-btn1');
+    if (btn1El) {
+      btn1El.addEventListener('click', function() {
+        if (c.onBtn1) { c.onBtn1(); }
+        else { document.getElementById('zone-warning-overlay').style.display = 'none'; }
+      });
+    }
+    if (c.onConfirm) {
+      document.getElementById('zone-confirm-btn').addEventListener('click', function() {
+        overlay.style.display = 'none';
+        c.onConfirm();
+      });
+    }
   }
 }
 
@@ -6568,9 +7125,13 @@ ${zoneLabel}
 function calcFinalTotal() {
   const rental = window._activeRental;
   if (!rental) return 0;
+  const zoneFee  = window._zoneSurcharge || 0;
+  // Поминутный: используем реальную стоимость рассчитанную в finishInspection
+  if (rental.tariffType === 'minute' && window._minuteActualCost != null) {
+    return window._minuteActualCost + zoneFee;
+  }
   const prepaid  = rental.total || 0;
   const overtime = calcOvertimeCharge();
-  const zoneFee  = window._zoneSurcharge || 0;
   return prepaid + overtime + zoneFee;
 }
 
@@ -6587,8 +7148,8 @@ function calcOvertimeCharge() {
 function showFinalScreen() {
   const rental = window._activeRental;
   // Сбрасываем кэш истории — после завершения поездки список должен обновиться
-  window._historyLastFetch = 0;
-  window._historyCache = null;
+  // Сбрасываем кэш истории — после поездки нужно загрузить свежие данные
+  refreshBookingHistory();
   document.getElementById('screen-inspection').classList.remove('active');
   document.getElementById('screen-final').classList.add('active');
 
@@ -6651,6 +7212,8 @@ function closeFinalScreen() {
   document.getElementById('screen-inspection').classList.remove('active');
   window._activeRental = null;
   window._zoneSurcharge = 0;
+  window._minuteActualCost = null;
+  window._totalPauseMs = 0;
   const pill2 = document.getElementById('rental-nav-pill');
   if (pill2) pill2.style.display = 'none';
   switchTab('map');
@@ -6668,133 +7231,96 @@ async function accrueCoinsAfterTrip() {
   const rental = window._activeRental;
   if (!rental) return;
 
-  const paidAmount = calcFinalTotal(); // сумма поездки в рублях
+  const paidAmount = calcFinalTotal();
   if (paidAmount <= 0) return;
 
   try {
-    const { doc, getDoc, updateDoc, serverTimestamp } =
-      await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-
-    // Получаем актуальные данные пользователя из Firestore
     const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
     const FB_PRJ = 'citycar-voronezh-3ed1b';
 
-    const qResp = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          structuredQuery: {
-            from: [{ collectionId: 'users' }],
-            where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: sess.phone } } },
-            limit: 1
-          }
-        })
-      }
-    );
-    const qData = await qResp.json();
-    if (!qData[0] || !qData[0].document) return;
+    // Используем кэш из onSnapshot — без лишнего запроса к Firebase
+    let fv;
+    let docName;
+    if (window._cachedUserData) {
+      const cached = window._cachedUserData;
+      fv = (f, def) => cached[f] !== undefined ? cached[f] : def;
+      docName = `projects/${FB_PRJ}/databases/(default)/documents/users/${sess.phone}`;
+    } else {
+      // Запасной вариант: читаем из Firebase если кэша нет
+      const qResp = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'users' }],
+              where: { fieldFilter: { field: { fieldPath: 'phone' }, op: 'EQUAL', value: { stringValue: sess.phone } } },
+              limit: 1
+            }
+          })
+        }
+      );
+      const qData = await qResp.json();
+      if (!qData[0] || !qData[0].document) return;
+      const userDoc = qData[0].document;
+      docName = userDoc.name;
+      const fields  = userDoc.fields || {};
+      fv = (f, def) => {
+        if (!fields[f]) return def;
+        return fields[f].integerValue !== undefined ? Number(fields[f].integerValue)
+             : fields[f].doubleValue  !== undefined ? Number(fields[f].doubleValue)
+             : fields[f].stringValue  !== undefined ? fields[f].stringValue
+             : fields[f].booleanValue !== undefined ? fields[f].booleanValue
+             : def;
+      };
+    }
 
-    const userDoc    = qData[0].document;
-    const docName    = userDoc.name;
-    const fields     = userDoc.fields || {};
+    const now      = new Date();
+    const nowMonth = now.getFullYear() + '-' + (now.getMonth() + 1);
 
-    const fv = (f, def) => {
-      if (!fields[f]) return def;
-      return fields[f].integerValue !== undefined ? Number(fields[f].integerValue)
-           : fields[f].doubleValue  !== undefined ? Number(fields[f].doubleValue)
-           : fields[f].stringValue  !== undefined ? fields[f].stringValue
-           : fields[f].booleanValue !== undefined ? fields[f].booleanValue
-           : def;
-    };
+    const currentBalance    = fv('bonusPoints', 0);
+    const totalEver         = fv('totalCoinsEarned', currentBalance);
+    const monthlyTrips      = fv('monthlyTrips', 0);
+    const monthlyTripsMonth = fv('monthlyTripsMonth', '');
+    const totalTrips        = fv('totalTrips', 0);
 
-    const now       = new Date();
-    const nowMonth  = now.getFullYear() + '-' + (now.getMonth()+1);
-
-    const currentBalance      = fv('bonusPoints', 0);
-    const totalEver           = fv('totalCoinsEarned', currentBalance);
-    const monthlyTrips        = fv('monthlyTrips', 0);
-    const monthlyTripsMonth   = fv('monthlyTripsMonth', '');
-    const totalTrips          = fv('totalTrips', 0);
-    const consecutiveClean    = fv('consecutiveCleanTrips', 0); // поездки без штрафов подряд
-    const firstTripDone       = fv('firstTripBonusPaid', false);
-    const birth               = fv('birth', ''); // формат ДД.ММ.ГГГГ
-
-    // ── Сбрасываем счётчик поездок месяца при смене месяца ──
     const monthTripsActual = (monthlyTripsMonth === nowMonth) ? monthlyTrips : 0;
     const newMonthTrips    = monthTripsActual + 1;
     const newTotalTrips    = totalTrips + 1;
 
-    // ── Детализация начислений ──
+    // ── Начисления по утверждённой таблице ──
     const breakdown = [];
 
-    // 1. Базовое начисление: 10 монет за каждые 100 ₽
+    // 1. Базовое: +10 монет за каждые 100 ₽
     const baseCoins = Math.floor(paidAmount / 100) * 10;
     if (baseCoins > 0) breakdown.push({ reason: 'за оплату ' + paidAmount + ' ₽', coins: baseCoins });
 
-    // 2. Приветственный бонус — только за первую поездку
-    if (!firstTripDone) breakdown.push({ reason: '🎉 Первая аренда', coins: 200 });
+    // 2. 3 поездки в месяце → +100 (1 раз/мес)
+    if (monthTripsActual < 3 && newMonthTrips >= 3)
+      breakdown.push({ reason: '🎯 3 поездки за месяц', coins: 100 });
 
-    // 3. Бонус за раннее бронирование (если бронь сделана за 24+ ч)
-    if (rental.bookedAt && rental.startedAt) {
-      const bookedMs = new Date(rental.bookedAt).getTime();
-      const startMs  = new Date(rental.startedAt).getTime();
-      if ((startMs - bookedMs) >= 24 * 60 * 60 * 1000) {
-        breakdown.push({ reason: '📅 Бронь за 24+ часа', coins: 30 });
-      }
-    }
+    // 3. 5 поездок в месяце → +200 (1 раз/мес)
+    if (monthTripsActual < 5 && newMonthTrips >= 5)
+      breakdown.push({ reason: '🔥 5 поездок за месяц', coins: 200 });
 
-    // 4. Бонус за частоту поездок в месяце
-    if (monthTripsActual < 3  && newMonthTrips >= 3)  breakdown.push({ reason: '🎯 3 поездки за месяц', coins: 100 });
-    if (monthTripsActual < 5  && newMonthTrips >= 5)  breakdown.push({ reason: '🔥 5 поездок за месяц', coins: 300 });
-    if (monthTripsActual < 10 && newMonthTrips >= 10) breakdown.push({ reason: '🏆 10 поездок за месяц', coins: 800 });
+    // 4. 10 поездок в месяце → +400 (1 раз/мес)
+    if (monthTripsActual < 10 && newMonthTrips >= 10)
+      breakdown.push({ reason: '🏆 10 поездок за месяц', coins: 400 });
 
-    // 5. Бонус за качество вождения (без штрафов подряд)
-    // consecutiveCleanTrips увеличивается если нет штрафа за эту поездку
-    // (штраф за поездку = если в rental.fines есть записи)
-    const hasFine = !!(rental.fines && rental.fines.length > 0);
-    const newConsecutive = hasFine ? 0 : consecutiveClean + 1;
-    if (!hasFine) {
-      if (consecutiveClean < 5  && newConsecutive >= 5)  breakdown.push({ reason: '🕊️ 5 поездок без штрафов', coins: 200 });
-      if (consecutiveClean < 10 && newConsecutive >= 10) breakdown.push({ reason: '🕊️ 10 поездок без штрафов', coins: 500 });
-    }
-
-    // 6. День рождения (±3 дня)
-    if (birth) {
-      try {
-        const parts = birth.split('.');
-        if (parts.length === 3) {
-          const bdDay = parseInt(parts[0]), bdMon = parseInt(parts[1]);
-          const todayDay = now.getDate(), todayMon = now.getMonth() + 1;
-          const lastBdBonus = fv('lastBirthdayBonus', '');
-          const thisYear    = now.getFullYear();
-          const dayDiff = Math.abs((new Date(thisYear, bdMon-1, bdDay) - new Date(thisYear, todayMon-1, todayDay)) / 86400000);
-          if (dayDiff <= 3 && lastBdBonus !== String(thisYear)) {
-            breakdown.push({ reason: '🎂 День рождения', coins: 150, setBdYear: thisYear });
-          }
-        }
-      } catch(_) {}
-    }
-
-    // ── Итого начислено ──
     const totalAccrued = breakdown.reduce((s, b) => s + b.coins, 0);
     const newBalance   = currentBalance + totalAccrued;
-    const newTotalEver = totalEver      + totalAccrued;
+    const newTotalEver = totalEver + totalAccrued;
 
-    // ── Обновляем Firestore через REST ──
+    // ── Сохраняем в Firestore ──
     const updateFields = {
-      bonusPoints:           { integerValue: String(newBalance) },
-      totalCoinsEarned:      { integerValue: String(newTotalEver) },
-      totalTrips:            { integerValue: String(newTotalTrips) },
-      monthlyTrips:          { integerValue: String(newMonthTrips) },
-      monthlyTripsMonth:     { stringValue:  nowMonth },
-      consecutiveCleanTrips: { integerValue: String(newConsecutive) },
-      lastTripAt:            { stringValue:  now.toISOString() }
+      bonusPoints:       { integerValue: String(newBalance) },
+      totalCoinsEarned:  { integerValue: String(newTotalEver) },
+      totalTrips:        { integerValue: String(newTotalTrips) },
+      monthlyTrips:      { integerValue: String(newMonthTrips) },
+      monthlyTripsMonth: { stringValue:  nowMonth },
+      lastTripAt:        { stringValue:  now.toISOString() }
     };
-    if (!firstTripDone) updateFields.firstTripBonusPaid = { booleanValue: true };
-    const bdEntry = breakdown.find(b => b.setBdYear);
-    if (bdEntry) updateFields.lastBirthdayBonus = { stringValue: String(bdEntry.setBdYear) };
 
     const updateMask = Object.keys(updateFields).map(k => 'updateMask.fieldPaths=' + k).join('&');
     await fetch(
@@ -6806,35 +7332,40 @@ async function accrueCoinsAfterTrip() {
       }
     );
 
-    // ── Обновляем локальную сессию ──
     sess.bonusPoints      = newBalance;
     sess.totalCoinsEarned = newTotalEver;
     try { localStorage.setItem('citycar_session', JSON.stringify(sess)); } catch(_) {}
 
-    // ── Показываем блок начисления на финальном экране ──
+    // Обновляем кэш немедленно — не ждём onSnapshot
+    if (window._cachedUserData) {
+      window._cachedUserData.bonusPoints      = newBalance;
+      window._cachedUserData.totalCoinsEarned = newTotalEver;
+      window._cachedUserData.totalTrips       = newTotalTrips;
+    }
+    // Обновляем UI профиля немедленно
+    const bonusEls = document.querySelectorAll('#stat-bonus, .profile-bonus-balance');
+    bonusEls.forEach(el => { if (el) el.textContent = newBalance.toLocaleString('ru-RU') + ' 🪙'; });
+
     if (totalAccrued > 0) {
-      const block  = document.getElementById('final-coins-block');
-      const amtEl  = document.getElementById('final-coins-amount');
-      const detEl  = document.getElementById('final-coins-detail');
-      const balEl  = document.getElementById('final-coins-balance');
+      const block = document.getElementById('final-coins-block');
+      const amtEl = document.getElementById('final-coins-amount');
+      const detEl = document.getElementById('final-coins-detail');
+      const balEl = document.getElementById('final-coins-balance');
       if (block) {
         block.style.display = 'block';
         if (amtEl) amtEl.textContent = '+' + totalAccrued.toLocaleString('ru-RU') + ' CityCoins';
         if (detEl) detEl.textContent = breakdown.map(b => b.reason + ' +' + b.coins).join(' · ');
         if (balEl) balEl.textContent = 'Итого на счёте: ' + newBalance.toLocaleString('ru-RU') + ' 🪙';
       }
-      // Push-уведомление или тост
-      showToastMsg('🪙', '+' + totalAccrued + ' CityCoins начислено!', breakdown.map(b=>b.reason).join(', '));
+      showToastMsg('🪙', '+' + totalAccrued + ' CityCoins начислено!', breakdown.map(b => b.reason).join(', '));
     }
 
-    console.log('[CityCoins] Начислено:', totalAccrued, '| Баланс:', newBalance, '| Детали:', breakdown);
+    console.log('[CityCoins] Начислено:', totalAccrued, '| Баланс:', newBalance);
 
   } catch(e) {
     console.warn('[CityCoins] Ошибка начисления:', e.message);
   }
 }
-
-
 
 // ─── ПРОВЕРКА АКТИВНОЙ АРЕНДЫ ПРИ ЗАГРУЗКЕ ───────
 // Если у пользователя есть активная аренда — показываем экран
@@ -6842,29 +7373,134 @@ async function checkActiveRental() {
   const session = loadSession();
   if (!session || !session.phone) return;
 
+  // Ждём пока Firebase инициализируется (до 8 секунд, проверяем каждые 200мс)
+  if (!window._firestoreDB) {
+    let waited = 0;
+    await new Promise(resolve => {
+      const iv = setInterval(() => {
+        waited += 200;
+        if (window._firestoreDB || waited >= 8000) { clearInterval(iv); resolve(); }
+      }, 200);
+    });
+    if (!window._firestoreDB) { console.warn('checkActiveRental: _firestoreDB не инициализирован'); return; }
+  }
+
   try {
-    const { query, where, getDocs, collection, orderBy, limit } =
+    const { query, where, getDocs, collection, orderBy, limit, doc, getDoc } =
       await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-    const snap = await getDocs(query(
+
+    // Сначала проверяем sessionStorage — был ли недавний возврат с оплаты
+    let paidBookingId = null;
+    try { paidBookingId = sessionStorage.getItem('citycar_paid_booking'); } catch(_) {}
+
+    if (paidBookingId) {
+      const snap = await getDoc(doc(window._firestoreDB, 'bookings', paidBookingId));
+      if (snap.exists()) {
+        const data = { id: snap.id, ...snap.data() };
+        if (data.status === 'confirmed' || data.status === 'active' || data.paymentStatus === 'paid') {
+          try { sessionStorage.removeItem('citycar_paid_booking'); } catch(_) {}
+          if (data.status === 'active' && data.startedAt) {
+            data.startDT = new Date(data.startedAt);
+            data.paidUntilDT = data.paidUntil ? new Date(data.paidUntil) : null;
+            startRentalScreen(data);
+          } else {
+            showBookingPaidScreen(data);
+          }
+          // Запускаем listener чтобы ловить изменения статуса
+          if (window.listenActiveBooking) window.listenActiveBooking(paidBookingId);
+          return;
+        }
+      }
+    }
+
+    // Ищем активную аренду (status=active)
+    const snapActive = await getDocs(query(
       collection(window._firestoreDB, 'bookings'),
       where('phone', '==', session.phone),
       where('status', '==', 'active'),
       limit(1)
     ));
-    if (!snap.empty) {
-      const doc  = snap.docs[0];
-      const data = { id: doc.id, ...doc.data() };
-      // Восстанавливаем DateTime из строк
+    if (!snapActive.empty) {
+      const d = snapActive.docs[0];
+      const data = { id: d.id, ...d.data() };
       if (data.startedAt) data.startDT = new Date(data.startedAt);
       if (data.paidUntil) data.paidUntilDT = new Date(data.paidUntil);
       startRentalScreen(data);
+      return;
+    }
+
+    // Ищем подтверждённую оплаченную бронь (status=confirmed, paymentStatus=paid)
+    const snapConf = await getDocs(query(
+      collection(window._firestoreDB, 'bookings'),
+      where('phone', '==', session.phone),
+      where('status', '==', 'confirmed'),
+      limit(1)
+    ));
+    if (!snapConf.empty) {
+      const d = snapConf.docs[0];
+      const data = { id: d.id, ...d.data() };
+      if (data.paymentStatus === 'paid') {
+        showBookingPaidScreen(data);
+        if (window.listenActiveBooking) window.listenActiveBooking(data.id);
+      }
     }
   } catch(e) { console.error('checkActiveRental:', e); }
 }
 
+// Показать экран «Бронь оплачена — начните осмотр»
+function showBookingPaidScreen(booking) {
+  window._activeRental = booking;
+  window._operatorFinishedHandled = false;
+
+  const carEl     = document.getElementById('bpaid-car-name');
+  const carEl2    = document.getElementById('bpaid-car-display');
+  const tariffEl  = document.getElementById('bpaid-tariff');
+  const tariffEl2 = document.getElementById('bpaid-tariff-display');
+  const totalEl   = document.getElementById('bpaid-total');
+  const dtEl      = document.getElementById('bpaid-datetime');
+
+  const carName  = booking.car || '—';
+  const tarif    = booking.tarif || booking.tariffType || '—';
+  const total    = (booking.total || 0).toLocaleString('ru-RU') + ' ₽';
+  const dateStr  = booking.dateStr || booking.date || '—';
+  const timeStr  = booking.time || '—';
+
+  if (carEl)     carEl.textContent     = carName;
+  if (carEl2)    carEl2.textContent    = carName;
+  if (tariffEl)  tariffEl.textContent  = tarif;
+  if (tariffEl2) tariffEl2.textContent = tarif;
+  if (totalEl)   totalEl.textContent   = total;
+  if (dtEl)      dtEl.textContent      = dateStr + ' ' + timeStr;
+
+  // Скрываем все другие rental-экраны
+  ['screen-rental','screen-inspection','screen-pre-inspection','screen-pending-finish','screen-final'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+
+  document.getElementById('screen-booking-paid').classList.add('active');
+}
+
+function hideBookingPaidScreen() {
+  document.getElementById('screen-booking-paid').classList.remove('active');
+}
+
+// Переход из экрана «Оплачено» к осмотру
+function startPreInspectionFromPaid() {
+  document.getElementById('screen-booking-paid').classList.remove('active');
+  const rental = window._activeRental;
+  if (!rental) return;
+  // Помечаем как не-preInspectionDone чтобы пройти через осмотр
+  rental.preInspectionDone = false;
+  startPreInspectionScreen(rental);
+}
+
+// Экспортируем в window чтобы можно было вызвать из любого места
+window.checkActiveRental = checkActiveRental;
+
 // Вызываем проверку после загрузки Firebase
 setTimeout(() => {
-  if (window._firestoreDB) checkActiveRental();
+  checkActiveRental();
 }, 3000);
 
 
@@ -6955,20 +7591,33 @@ async function sendPreInspectionPhotos() {
     } catch(e) { console.error('upload pre photo:', slot, e); }
   }
 
-  // Сохраняем URL фото и статус в Firebase
+  // Рассчитываем startedAt и paidUntil
+  const startedAt = now.toISOString();
+  // Для поминутного тарифа — берём выбранное клиентом время (estimateMinutes)
+  // Для пакетного — durationMin из Firebase (записан из tariff.hours при бронировании)
+  const durationMin = rental.tariffType === 'minute'
+    ? (rental.estimateMinutes || rental.durationMin || 60)
+    : (rental.durationMin || 120);
+  const paidUntilDT = new Date(now.getTime() + durationMin * 60000);
+  const paidUntil = paidUntilDT.toISOString();
+
+  // Сохраняем фото + запускаем аренду в Firebase сразу
   if (rental.id && window._firestoreDB) {
     try {
       const { doc, updateDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
       await updateDoc(doc(window._firestoreDB, 'bookings', rental.id), {
         preInspectionDone: true,
-        preInspectionAt: now.toISOString(),
+        preInspectionAt: startedAt,
         preInspectionPhotos: photoUrls,
-        preInspectionCount: slots.length
+        preInspectionCount: slots.length,
+        status: 'active',
+        startedAt: startedAt,
+        paidUntil: paidUntil
       });
     } catch(e) { console.error('preInspection Firebase:', e); }
   }
 
-  // Уведомление оператору с ссылками на фото
+  // Уведомление оператору с ссылками на фото (оператор видит, но не блокирует процесс)
   const photoLinks = Object.entries(photoUrls).map(([k,v]) => '📷 ' + k + ': ' + v).join('\n');
   sendTelegramMessage(TG_CHAT_OPERATOR,
 `📸 <b>ОСМОТР ПЕРЕД ПОЕЗДКОЙ — CityCAR</b>
@@ -6982,15 +7631,89 @@ async function sendPreInspectionPhotos() {
 
 ${photoLinks}
 
-➡️ В CRM нажмите «Выдать ключи» после проверки фото`
+✅ Аренда запущена автоматически`
   );
 
-  // Переходим на экран ожидания
+  // Скрываем экран осмотра — запускаем аренду немедленно
   document.getElementById('screen-pre-inspection').classList.remove('active');
-  document.getElementById('screen-pending-finish').classList.remove('active');
+  const updated = {
+    ...rental,
+    preInspectionDone: true,
+    status: 'active',
+    startedAt: startedAt,
+    startDT: now,
+    paidUntil: paidUntil,
+    paidUntilDT: paidUntilDT
+  };
+  window._activeRental = updated;
+  showToastMsg('🚗', 'Аренда началась!', 'Хорошей поездки!');
+  setTimeout(() => _origStartRentalScreen(updated), 600);
+}
 
-  // Показываем ожидание — ждём когда оператор нажмёт «Выдать ключи»
-  showPendingFinishScreen('pre');
+// Кнопка отказа от аренды после осмотра
+async function refuseAfterInspection() {
+  const rental = window._activeRental;
+  if (!rental) return;
+
+  const paymentId = rental.paymentId || '';
+  const amount = rental.total || 0;
+
+  if (!confirm('Отказаться от аренды? Оплата будет возвращена на карту.')) return;
+
+  const btn = document.getElementById('btn-pre-inspection-refuse');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Возврат...'; }
+
+  try {
+    if (paymentId && amount > 0) {
+      const resp = await fetch(WORKER_URL + '/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId: String(paymentId), amount: amount, bookingId: rental.id || '' })
+      });
+      const result = await resp.json();
+      if (!result.ok) {
+        showToastMsg('⚠️', 'Ошибка возврата', result.error || 'Обратитесь к оператору');
+        if (btn) { btn.disabled = false; btn.textContent = '❌ Отказаться от аренды'; }
+        return;
+      }
+    }
+
+    // Обновляем статус в Firebase
+    if (rental.id && window._firestoreDB) {
+      try {
+        const { doc, updateDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await updateDoc(doc(window._firestoreDB, 'bookings', rental.id), {
+          status: 'cancelled',
+          cancelledAt: new Date().toISOString(),
+          cancelReason: 'refused_after_inspection'
+        });
+        if (rental.carId) {
+          await updateDoc(doc(window._firestoreDB, 'fleet', rental.carId), {
+            status: 'free', blockedUntil: null, blockedUntilStr: null
+          });
+        }
+      } catch(e) { console.warn('refuse Firebase:', e); }
+    }
+
+    sendTelegramMessage(TG_CHAT_OPERATOR,
+`❌ <b>ОТКАЗ ОТ АРЕНДЫ — CityCAR</b>
+
+🚗 ${rental.car || '—'}
+👤 ${rental.phone || '—'}
+🆔 Заявка: ${rental.id || '—'}
+💰 Возврат: ${amount} ₽
+🕐 ${new Date().toLocaleString('ru-RU', {timeZone:'Europe/Moscow'})}`
+    );
+
+    document.getElementById('screen-pre-inspection').classList.remove('active');
+    window._activeRental = null;
+    showToastMsg('✅', 'Аренда отменена', 'Деньги вернутся на карту в течение 3–5 дней');
+    setTimeout(() => switchTab('map'), 1500);
+  } catch(e) {
+    console.error('refuseAfterInspection:', e);
+    showToastMsg('⚠️', 'Ошибка', 'Нет соединения. Позвоните оператору.');
+    if (btn) { btn.disabled = false; btn.textContent = '❌ Отказаться от аренды'; }
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -7025,7 +7748,7 @@ function showPendingFinishScreen(mode) {
 
   // Слушаем Firebase — ждём ответа оператора
   if (rental && rental.id) {
-    if (window._pendingCheckInterval) clearInterval(window._pendingCheckInterval);
+    if (window._pendingCheckInterval) { clearInterval(window._pendingCheckInterval); window._pendingCheckInterval = null; }
     window._pendingCheckInterval = setInterval(async () => {
       try {
         const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
@@ -7063,12 +7786,12 @@ function showPendingFinishScreen(mode) {
 }
 
 // ════════════════════════════════════════════════
+// ════════════════════════════════════════════════
 // Переопределяем startRentalScreen:
 // если preInspectionDone = false → сначала осмотр
 // ════════════════════════════════════════════════
 const _origStartRentalScreen = startRentalScreen;
 startRentalScreen = function(booking) {
-  // Если осмотр ещё не сделан — показываем экран осмотра
   if (!booking.preInspectionDone) {
     startPreInspectionScreen(booking);
     return;
@@ -7078,12 +7801,16 @@ startRentalScreen = function(booking) {
 
 // ════════════════════════════════════════════════
 // Переопределяем finishInspection (ПОСЛЕ поездки):
-// вместо сразу showFinalScreen — показываем ожидание
+// загружаем фото → уведомляем оператора → сразу showFinalScreen
+// Оператор видит фото в Telegram, клиент не ждёт его ответа
 // ════════════════════════════════════════════════
 const _origFinishInspection = finishInspection;
 finishInspection = async function() {
   const rental = window._activeRental;
   if (!rental) return;
+
+  const finishBtn = document.getElementById('btn-inspection-next');
+  if (finishBtn) { finishBtn.disabled = true; finishBtn.textContent = '⏳ Загружаем фото...'; }
 
   const pad = n => String(n).padStart(2,'0');
   const now = new Date();
@@ -7110,35 +7837,40 @@ finishInspection = async function() {
     } catch(e) { console.error('upload post photo:', pslot, e); }
   }
 
+  const finalTotal = calcFinalTotal();
+  const zoneFeeNow = window._zoneSurcharge || 0;
+  const forbiddenZone = !!window._zoneForbiddenConfirmed;
+  window._zoneForbiddenConfirmed = false; // сброс
+
   const postPhotoLinks = Object.entries(postPhotoUrls).map(([k,v]) => '📷 ' + k + ': ' + v).join('\n');
   sendTelegramMessage(TG_CHAT_OPERATOR,
-`🏁 <b>СДАЧА АВТО — требует проверки</b>
+`🏁 <b>СДАЧА АВТО — CityCAR</b>
 
 🚗 ${rental.car}
 📋 ${rental.tarif}
 🕐 Начало: ${rental.startDT ? (pad(rental.startDT.getHours())+':'+pad(rental.startDT.getMinutes())) : '—'}
 🏁 Сдача: ${nowStr}
-💰 Предварительно: ${calcFinalTotal()} ₽
+📍 Зона: ${forbiddenZone ? '🚫 ЗАПРЕЩЁННАЯ — выставить счёт за доплату!' : (zoneFeeNow > 0 ? 'жёлтая (+' + zoneFeeNow + ' ₽)' : 'зелёная')}
+💰 Итого: ${finalTotal} ₽
 📸 Фото сдачи: ${postSlots.length} / 6
 🆔 Заявка: ${rental.id || '—'}
 
-${postPhotoLinks}
-
-⚠️ <b>Требуется подтверждение!</b>
-Нажмите ✅ «Всё в порядке» или ⚠️ «Повреждения» в CRM → Активные аренды`
+${postPhotoLinks}`
   );
 
-  // Обновляем статус в Firebase → pending_finish
+  // Обновляем статус в Firebase → done сразу
   if (rental.id && window._firestoreDB) {
     try {
       const { doc, updateDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
       await updateDoc(doc(window._firestoreDB, 'bookings', rental.id), {
-        status: 'pending_finish',
+        status: 'done',
         postInspectionDone: true,
         postInspectionAt: now.toISOString(),
         postInspectionPhotos: postPhotoUrls,
         endedAt: now.toISOString(),
-        totalCharged: calcFinalTotal()
+        totalCharged: finalTotal,
+        zoneSurcharge: zoneFeeNow,
+        finishZone: zoneFeeNow > 0 ? 'surcharge' : 'free'
       });
       if (rental.carId) {
         await updateDoc(doc(window._firestoreDB, 'fleet', rental.carId), {
@@ -7148,25 +7880,136 @@ ${postPhotoLinks}
     } catch(e) { console.error('finishInspection:', e); }
   }
 
-  // Скрываем экран осмотра, показываем ожидание
+  // ── Финансовый расчёт при завершении ──────────────────────────────────────
+  const overtimeCharge = calcOvertimeCharge();
+  const extraCharge    = overtimeCharge + zoneFeeNow;
+  const payId = rental.paymentId || '';
+  const rebillId = rental.rebillId || (loadSession()||{}).rebillId || '';
+
+  // ── ПОМИНУТНЫЙ ТАРИФ: точный пересчёт с учётом пауз ──────────────────────
+  if (rental.tariffType === 'minute' && rental.startDT && payId) {
+    const activeRate    = rental.ratePerMin || 8.7; // ₽/мин в движении
+    const pauseRate     = 4;                         // ₽/мин на паузе
+
+    // Суммарное время паузы (если сейчас ещё на паузе — добавляем текущую)
+    let totalPauseMs = window._totalPauseMs || 0;
+    if (window._rentalPaused && window._pauseStartTime) {
+      totalPauseMs += (now - window._pauseStartTime);
+    }
+
+    const totalMs      = now - rental.startDT;
+    const activeMs     = Math.max(totalMs - totalPauseMs, 0);
+    const activeMin    = Math.ceil(activeMs / 60000);
+    const pauseMin     = Math.ceil(totalPauseMs / 60000);
+
+    // Фактическая стоимость: движение + паузы
+    const actualCost   = Math.round(activeMin * activeRate + pauseMin * pauseRate);
+    const prepaid      = rental.total || 0; // уже оплачено при бронировании
+    const diff         = prepaid - actualCost; // >0 → возврат, <0 → доначисление
+
+    console.log('[Поминутный] движение=' + activeMin + 'мин × ' + activeRate +
+      ' + пауза=' + pauseMin + 'мин × ' + pauseRate +
+      ' = ' + actualCost + ' ₽ | оплачено=' + prepaid + ' ₽ | разница=' + diff);
+
+    // Обновляем totalCharged в Firebase точной суммой
+    if (rental.id && window._firestoreDB) {
+      try {
+        const { doc: d2, updateDoc: upd2 } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await upd2(d2(window._firestoreDB, 'bookings', rental.id), {
+          totalCharged: actualCost,
+          actualMinutes: activeMin,
+          pauseMinutes: pauseMin,
+          minuteRefund: diff > 0 ? diff : 0,
+          minuteExtra:  diff < 0 ? -diff : 0
+        });
+      } catch(_) {}
+    }
+
+    if (diff > 1) {
+      // Возврат за неиспользованное время
+      try {
+        const refResp = await fetch(WORKER_URL + '/refund', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paymentId: String(payId), amount: diff, bookingId: rental.id })
+        });
+        const refRes = await refResp.json();
+        if (refRes.ok) showToastMsg('💸', 'Возврат ' + diff + ' ₽', 'За неиспользованное время');
+        else console.warn('[Поминутный] Возврат не прошёл:', refRes);
+      } catch(e) { console.warn('minute refund:', e); }
+
+    } else if (diff < -1 && rebillId) {
+      // Доначисление за перерасход времени
+      const extraAmt = -diff + zoneFeeNow;
+      try {
+        await fetch(WORKER_URL + '/rebill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rebillId,
+            bookingId: rental.id,
+            amount: extraAmt,
+            phone: (rental.phone || (loadSession()||{}).phone || '').replace(/\D/g,''),
+            description: 'Доплата: перерасход времени · CityCar'
+          })
+        });
+      } catch(e) { console.warn('minute extra:', e); }
+    }
+
+  } else if (extraCharge > 0 && rebillId && rental.id) {
+    // ПАКЕТНЫЙ ТАРИФ: списываем сверхурочные + зону через rebill
+    try {
+      await fetch(WORKER_URL + '/rebill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rebillId,
+          bookingId: rental.id,
+          amount: extraCharge,
+          phone: (rental.phone || (loadSession()||{}).phone || '').replace(/\D/g,''),
+          description: 'Доплата при завершении аренды CityCar'
+        })
+      });
+    } catch(e) { console.warn('finish extra charge:', e); }
+  }
+
+  // Для поминутного — сохраняем реальную стоимость для финального экрана
+  if (rental.tariffType === 'minute') {
+    const aRate = rental.ratePerMin || 8.7;
+    let tPauseMs = window._totalPauseMs || 0;
+    if (window._rentalPaused && window._pauseStartTime) tPauseMs += (now - window._pauseStartTime);
+    const totalMs   = now - rental.startDT;
+    const activeMin = Math.ceil(Math.max(totalMs - tPauseMs, 0) / 60000);
+    const pauseMin  = Math.ceil(tPauseMs / 60000);
+    window._minuteActualCost = Math.round(activeMin * aRate + pauseMin * 4);
+  } else {
+    window._minuteActualCost = null;
+  }
+
   document.getElementById('screen-inspection').classList.remove('active');
   if (window._rentalTimer) { clearInterval(window._rentalTimer); window._rentalTimer = null; }
-  showPendingFinishScreen('post');
+  if (window._pendingCheckInterval) { clearInterval(window._pendingCheckInterval); window._pendingCheckInterval = null; }
+  showFinalScreen();
 };
 
 // phone formatting handled by authPhoneFormat()
 
 // ── PUSH И TELEGRAM УВЕДОМЛЕНИЯ ─────────────────────────────────────────────
 
-// Вызывается по клику — запрашивает нативное разрешение через Capacitor
+// Вызывается напрямую по клику — только так браузер разрешает Notification
 window.enablePushNotifications = async function() {
   const label  = document.getElementById('push-menu-label');
   const sub    = document.getElementById('push-menu-sub');
   const status = document.getElementById('push-menu-status');
 
-  // Уже включено
-  if (window._fcmToken) {
+  // Проверяем текущий статус
+  if (Notification.permission === 'granted' && window._fcmToken) {
     showToastMsg('✅','Уведомления уже включены','Push работает');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    showToastMsg('⚠️','Уведомления заблокированы',
+      'Разрешите уведомления в настройках браузера для этого сайта');
     return;
   }
 
@@ -7174,16 +8017,80 @@ window.enablePushNotifications = async function() {
   if (status) status.textContent = '...';
 
   try {
-    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
-      const Push = window.Capacitor.Plugins.PushNotifications;
-      const permResult = await Push.requestPermissions();
-      if (permResult.receive !== 'granted') {
-        if (sub)    sub.textContent    = 'Разрешение отклонено';
-        if (status) status.textContent = 'Выкл';
-        showToastMsg('⚠️','Разрешение не выдано','Вы можете включить позже в настройках');
-        return;
+    // ВАЖНО: requestPermission вызывается СИНХРОННО в обработчике клика
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      if (sub)    sub.textContent    = 'Разрешение отклонено';
+      if (status) status.textContent = 'Выкл';
+      showToastMsg('⚠️','Разрешение не выдано','Вы можете включить позже в настройках');
+      return;
+    }
+
+    if (sub) sub.textContent = 'Получаем токен...';
+
+    // Теперь получаем FCM токен
+    if (!window._fcmMessaging) {
+      if (sub) sub.textContent = 'Firebase недоступен, попробуйте в Chrome';
+      return;
+    }
+
+    const swReg = window._swRegistration ||
+      await navigator.serviceWorker.getRegistration('/app/');
+    if (!swReg) {
+      if (sub) sub.textContent = 'Service Worker не зарегистрирован';
+      return;
+    }
+
+    const VAPID = 'BEeoJZwo5HOc0dKfKost7H6mShg3hjE59fyRWR90BXGhdFssONuynP4YrxyHul2RXckqaLnTFFpP3YZTcmMMwYM';
+    const { getToken } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js');
+    const token = await getToken(window._fcmMessaging, {
+      vapidKey: VAPID,
+      serviceWorkerRegistration: swReg
+    });
+
+    if (!token) {
+      if (sub) sub.textContent = 'Не удалось получить токен';
+      return;
+    }
+
+    window._fcmToken = token;
+    console.log('[FCM] Токен получен по клику');
+
+    // Сохраняем в Firestore через REST (без конфликтов с импортами)
+    const phone = (loadSession() || {}).phone || state.phone;
+    if (phone) {
+      const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
+      const FB_PRJ = 'citycar-voronezh-3ed1b';
+      const qResp = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'users' }],
+              where: { fieldFilter: {
+                field: { fieldPath: 'phone' }, op: 'EQUAL',
+                value: { stringValue: phone }
+              }},
+              limit: 1
+            }
+          })
+        }
+      );
+      const qData = await qResp.json();
+      if (qData[0] && qData[0].document) {
+        const docName = qData[0].document.name;
+        await fetch(
+          `https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=fcmToken&key=${FB_KEY}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: { fcmToken: { stringValue: token } } })
+          }
+        );
+        console.log('[FCM] Токен сохранён в Firestore');
       }
-      await Push.register(); // токен придёт через listener 'registration' (см. deviceready)
     }
 
     // Обновляем UI
@@ -7263,15 +8170,11 @@ function initCoinsPayBlock() {
   const detail = document.getElementById('coins-pay-detail');
   if (detail) detail.style.display = 'none';
 
-  // Всегда показываем блок — если монет мало, блокируем кнопку и показываем подсказку
-  block.style.display = 'block';
-  const btn2 = document.getElementById('coins-toggle-btn');
   if (coins >= 100) {
+    block.style.display = 'block';
     if (avail) avail.textContent = 'Доступно: ' + coins.toLocaleString('ru-RU') + ' 🪙';
-    if (btn2) { btn2.style.opacity = '1'; btn2.style.pointerEvents = 'auto'; }
   } else {
-    if (avail) avail.textContent = 'Накопите от 100 🪙 чтобы списать';
-    if (btn2) { btn2.style.opacity = '0.4'; btn2.style.pointerEvents = 'none'; }
+    block.style.display = 'none';
   }
 }
 
@@ -7331,21 +8234,9 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
   try {
     const FB_KEY = 'AIzaSyBQvTtF2NfK_Pvbb9qqf3tqqzXXXmrZbDk';
     const FB_PRJ = 'citycar-voronezh-3ed1b';
-    const qResp = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${FB_PRJ}/databases/(default)/documents:runQuery?key=${FB_KEY}`,
-      {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ structuredQuery: {
-          from:[{collectionId:'users'}],
-          where:{fieldFilter:{field:{fieldPath:'phone'},op:'EQUAL',value:{stringValue:phone}}},
-          limit:1
-        }})
-      }
-    );
-    const qData = await qResp.json();
-    if (!qData[0] || !qData[0].document) return;
-    const docName = qData[0].document.name;
-    const curBalance = Number((qData[0].document.fields.bonusPoints || {}).integerValue || 0);
+    // docName формируем из phone — без лишнего read
+    const docName = `projects/${FB_PRJ}/databases/(default)/documents/users/${encodeURIComponent(phone)}`;
+    const curBalance = (window._cachedUserData?.bonusPoints) || (loadSession()?.bonusPoints) || 0;
     const newBalance = Math.max(curBalance - coinsUsed, 0);
     await fetch(
       `https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=bonusPoints&key=${FB_KEY}`,
@@ -7362,13 +8253,46 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
   } catch(e) { console.warn('[CityCoins] Ошибка списания:', e.message); }
 }
 
+
+
+// iOS/Android specific fixes
+if (window.Capacitor) {
+  // Capacitor specific
+  console.log('[Capacitor] Platform:', Capacitor.getPlatform());
+
+  // Fix для iOS file input
+  if (Capacitor.getPlatform() === 'ios') {
+    document.addEventListener('deviceready', function() {
+      // Разрешаем inline video playback
+      const videos = document.querySelectorAll('video');
+      videos.forEach(v => v.setAttribute('playsinline', 'true'));
+    }, false);
+  }
+}
+
+// Cordova specific
+if (window.cordova) {
+  document.addEventListener('deviceready', function() {
+    console.log('[Cordova] Device ready');
+    // Запрашиваем разрешения
+    if (cordova.plugins && cordova.plugins.permissions) {
+      const permissions = cordova.plugins.permissions;
+      permissions.requestPermissions([
+        permissions.CAMERA,
+        permissions.READ_EXTERNAL_STORAGE,
+        permissions.WRITE_EXTERNAL_STORAGE
+      ]);
+    }
+  }, false);
+}
+
 </script>
 
 <!-- Скрытые file inputs — БЕЗ capture чтобы iOS показывал меню: Камера / Библиотека -->
-<input type="file" id="file-input-passport-main" accept="image/*" style="display:none" onchange="handleFileSelected(this,'passport-main')">
-<input type="file" id="file-input-passport-reg"  accept="image/*" style="display:none" onchange="handleFileSelected(this,'passport-reg')">
-<input type="file" id="file-input-license-front" accept="image/*" style="display:none" onchange="handleFileSelected(this,'license-front')">
-<input type="file" id="file-input-license-back"  accept="image/*" style="display:none" onchange="handleFileSelected(this,'license-back')">
+
+
+
+
 
 <!-- ══════════════════════════════════════════════
      ЭКРАН: АКТИВНАЯ АРЕНДА
@@ -7427,6 +8351,10 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
     <div style="margin-top:20px">
       <button class="rental-btn-extend" onclick="showExtendSheet()">
         ➕ Продлить на 30 мин — 300 ₽
+      </button>
+      <button class="rental-btn-end" id="btn-rental-pause" onclick="toggleRentalPause()"
+        style="background:var(--card);border:1.5px solid var(--border);color:var(--text);margin-bottom:10px">
+        ⏸ Пауза — поставить авто на стоп
       </button>
       <button class="rental-btn-end" onclick="startInspection()">
         🏁 Завершить аренду
@@ -7648,6 +8576,76 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
 
 
 <!-- ══════════════════════════════════════════════
+     ЭКРАН: БРОНЬ ОПЛАЧЕНА — ОТКРЫТЬ АВТО
+══════════════════════════════════════════════ -->
+<div class="rental-screen" id="screen-booking-paid">
+
+  <div class="rental-header" style="background:linear-gradient(135deg,#1A4DA0,#059669)">
+    <div class="rental-header-label">Бронирование оплачено</div>
+    <div class="rental-header-car" id="bpaid-car-name">KIA Rio</div>
+    <div class="rental-header-tariff" id="bpaid-tariff">Поминутный</div>
+  </div>
+
+  <div style="flex:1;overflow-y:auto;padding:20px 20px 120px">
+
+    <!-- Статус оплаты -->
+    <div style="text-align:center;padding:24px 0 20px">
+      <div style="font-size:64px;margin-bottom:12px">✅</div>
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px">Оплата прошла!</div>
+      <div style="font-size:14px;color:var(--text2)">Подойдите к автомобилю и нажмите кнопку ниже</div>
+    </div>
+
+    <!-- Карточка брони -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:16px">
+      <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Ваша бронь</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:17px;font-weight:700" id="bpaid-car-display">—</span>
+        <span style="font-size:15px;font-weight:700;color:var(--green)" id="bpaid-total">—</span>
+      </div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:3px">📋 <span id="bpaid-tariff-display">—</span></div>
+      <div style="font-size:13px;color:var(--text2)">📅 <span id="bpaid-datetime">—</span></div>
+    </div>
+
+    <!-- Инструкция -->
+    <div style="background:rgba(5,150,105,0.08);border:1px solid rgba(5,150,105,0.25);border-radius:12px;padding:14px 16px;margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;color:var(--green);margin-bottom:8px">📍 Что делать дальше</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2)">
+          <span style="width:22px;height:22px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0">1</span>
+          Подойдите к автомобилю
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2)">
+          <span style="width:22px;height:22px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0">2</span>
+          Нажмите «Начать осмотр»
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2)">
+          <span style="width:22px;height:22px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0">3</span>
+          Сделайте 6 фото авто
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2)">
+          <span style="width:22px;height:22px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0">4</span>
+          Аренда запустится автоматически
+        </div>
+      </div>
+    </div>
+
+    <!-- Главная кнопка -->
+    <button class="btn" id="btn-start-inspection-from-paid"
+      onclick="startPreInspectionFromPaid()"
+      style="width:100%;margin-bottom:12px;background:linear-gradient(135deg,var(--green),#059669);box-shadow:0 8px 24px rgba(5,150,105,0.35);font-size:17px;padding:18px">
+      🚗 Начать осмотр авто
+    </button>
+    <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="callOperator()">
+      📞 Связаться с оператором
+    </button>
+    <button class="btn btn-ghost" style="width:100%;font-size:13px;color:var(--text3)" onclick="hideBookingPaidScreen()">
+      Свернуть
+    </button>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
      ЭКРАН: ОСМОТР ПЕРЕД ПОЕЗДКОЙ
 ══════════════════════════════════════════════ -->
 <div class="rental-screen" id="screen-pre-inspection">
@@ -7721,20 +8719,20 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
         <div><div class="preinsp-step-text">Фото уйдут оператору</div><div class="preinsp-step-sub">Оператор проверит состояние авто</div></div>
       </div>
       <div class="preinsp-step">
-        <div class="preinsp-step-icon">✅</div>
-        <div><div class="preinsp-step-text">Оператор выдаст ключи</div><div class="preinsp-step-sub">Подтвердит через приложение</div></div>
+        <div class="preinsp-step-icon">🚗</div>
+        <div><div class="preinsp-step-text">Аренда запустится сразу</div><div class="preinsp-step-sub">Таймер начнёт отсчёт</div></div>
       </div>
       <div class="preinsp-step">
-        <div class="preinsp-step-icon">🚗</div>
-        <div><div class="preinsp-step-text">Таймер аренды запустится</div><div class="preinsp-step-sub">Поездка началась!</div></div>
+        <div class="preinsp-step-icon">❌</div>
+        <div><div class="preinsp-step-text">Передумали? Можно отказаться</div><div class="preinsp-step-sub">Деньги вернутся на карту</div></div>
       </div>
     </div>
 
     <button class="btn" id="btn-pre-inspection-send" disabled style="opacity:0.5;margin-bottom:10px" onclick="sendPreInspectionPhotos()">
-      📤 Отправить фото оператору
+      🚗 Начать аренду
     </button>
-    <button class="btn btn-ghost" onclick="showToastMsg('ℹ️','Осмотр обязателен','Сфотографируйте авто перед началом поездки')">
-      Пропустить нельзя
+    <button class="btn btn-ghost" id="btn-pre-inspection-refuse" onclick="refuseAfterInspection()" style="margin-bottom:10px;color:var(--red);border-color:rgba(239,68,68,0.3)">
+      ❌ Отказаться от аренды
     </button>
   </div>
 
@@ -7794,29 +8792,18 @@ async function deductCoinsAfterPayment(coinsUsed, phone) {
 </div>
 
 <script>
-// ── CLEANUP: отписка от Firebase listeners при сворачивании/закрытии приложения ──
-// Используем Capacitor App plugin вместо beforeunload (не работает в нативном)
-function _cleanupListeners() {
+// ── CLEANUP: отписка от всех Firebase listeners при закрытии страницы ──
+window.addEventListener('beforeunload', function() {
   if (window._userUnsubscribe)    { window._userUnsubscribe();    window._userUnsubscribe    = null; }
   if (window._bookingUnsubscribe) { window._bookingUnsubscribe(); window._bookingUnsubscribe = null; }
-  if (window._zoneUnsubscribe)    { window._zoneUnsubscribe();    window._zoneUnsubscribe    = null; }
+  if (window._zonesUnsubscribe)   { window._zonesUnsubscribe();   window._zonesUnsubscribe   = null; }
   if (window._fleetInterval)      { clearInterval(window._fleetInterval); window._fleetInterval = null; }
+  if (window._fleetUnsubscribe)   { window._fleetUnsubscribe();   window._fleetUnsubscribe   = null; }
   if (window._rentalTimer)        { clearInterval(window._rentalTimer);   window._rentalTimer   = null; }
   if (window._pendingCheckInterval) { clearInterval(window._pendingCheckInterval); window._pendingCheckInterval = null; }
   window._currentUserListener = null;
   window._fleetIntervalInitialized = false;
-}
-// Capacitor: срабатывает когда приложение уходит в фон
-document.addEventListener('deviceready', function() {
-  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
-    window.Capacitor.Plugins.App.addListener('appStateChange', function(state) {
-      if (!state.isActive) { _cleanupListeners(); }
-    });
-  }
 });
-// Фоллбэк для браузера/PWA
-window.addEventListener('beforeunload', _cleanupListeners);
-window.addEventListener('pagehide', _cleanupListeners);
 </script>
 </body>
 </html>
