@@ -1,0 +1,27 @@
+name: Generate package-lock.json
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate package-lock.json
+        run: |
+          npm install
+          ls -la package-lock.json
+
+      - name: Upload package-lock.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock-json
+          path: package-lock.json
