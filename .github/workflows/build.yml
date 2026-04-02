@@ -17,19 +17,125 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'  # ← Теперь работает быстро!
+          cache: 'npm'
 
-      - name: Install dependencies (cached)
-        run: npm ci  # ← Использует package-lock.json
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update capacitor config for maps
+        run: |
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.citycar.app",
+            "appName": "CityCAR",
+            "webDir": "www",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "iosScheme": "capacitor",
+              "cleartext": true,
+              "allowNavigation": ["*"]
+            },
+            "ios": {
+              "contentInset": "always",
+              "allowsLinkPreview": false,
+              "scrollEnabled": true,
+              "backgroundColor": "#F5F5F5"
+            },
+            "android": {
+              "backgroundColor": "#F5F5F5",
+              "allowMixedContent": true,
+              "captureInput": true
+            },
+            "plugins": {
+              "Camera": {
+                "ios": {
+                  "allowEditing": false,
+                  "resultType": "uri"
+                }
+              }
+            }
+          }
+          EOF
 
       - name: Add iOS platform
         run: |
           if [ ! -d "ios" ]; then
             npx cap add ios
           else
-            echo "iOS platform exists, syncing only"
             npx cap sync ios
           fi
+
+      - name: Install custom icons
+        run: |
+          if [ -d "resources/ios" ]; then
+            echo "Installing custom iOS icons..."
+            cp -r resources/ios/* ios/App/App/Assets.xcassets/ 2>/dev/null || true
+          fi
+
+      - name: Add Camera and Maps permissions (iOS)
+        run: |
+          cat > ios/App/App/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>CityCAR</string>
+              <key>CFBundleExecutable</key>
+              <string>App</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.citycar.app</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UILaunchStoryboardName</key>
+              <string>LaunchScreen</string>
+              <key>UIMainStoryboardFile</key>
+              <string>Main</string>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array>
+                  <string>armv7</string>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UISupportedInterfaceOrientations~ipad</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationPortraitUpsideDown</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UIViewControllerBasedStatusBarAppearance</key>
+              <true/>
+              <key>NSCameraUsageDescription</key>
+              <string>Это приложение использует камеру для загрузки фото автомобилей</string>
+              <key>NSPhotoLibraryAddUsageDescription</key>
+              <string>Это приложение сохраняет фото в галерею</string>
+              <key>NSPhotoLibraryUsageDescription</key>
+              <string>Это приложение использует галерею для выбора фото</string>
+              <key>NSLocationWhenInUseUsageDescription</key>
+              <string>Это приложение использует геолокацию для показа карты</string>
+              <key>NSLocationAlwaysUsageDescription</key>
+              <string>Это приложение использует геолокацию для поиска автомобилей</string>
+          </dict>
+          </plist>
+          EOF
 
       - name: Build iOS Archive
         run: |
@@ -67,7 +173,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'  # ← Кэширование включено
+          cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -75,22 +181,64 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install dependencies (cached)
-        run: npm ci  # ← Быстрая установка из кэша
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update capacitor config for maps
+        run: |
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.citycar.app",
+            "appName": "CityCAR",
+            "webDir": "www",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "iosScheme": "capacitor",
+              "cleartext": true,
+              "allowNavigation": ["*"]
+            },
+            "ios": {
+              "contentInset": "always",
+              "allowsLinkPreview": false,
+              "scrollEnabled": true,
+              "backgroundColor": "#F5F5F5"
+            },
+            "android": {
+              "backgroundColor": "#F5F5F5",
+              "allowMixedContent": true,
+              "captureInput": true
+            },
+            "plugins": {
+              "Camera": {
+                "ios": {
+                  "allowEditing": false,
+                  "resultType": "uri"
+                }
+              }
+            }
+          }
+          EOF
 
       - name: Add Android platform
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           else
-            echo "Android platform exists, syncing only"
             npx cap sync android
+          fi
+
+      - name: Install custom icons
+        run: |
+          if [ -d "resources/android" ]; then
+            echo "Installing custom Android icons..."
+            cp -r resources/android/* android/app/src/main/res/ 2>/dev/null || true
           fi
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Update AndroidManifest.xml
+      - name: Update AndroidManifest.xml (camera, maps, location)
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -101,6 +249,10 @@ jobs:
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
               <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-feature android:name="android.hardware.camera" android:required="false" />
+              <uses-feature android:name="android.hardware.location" android:required="false" />
               
               <application
                   android:allowBackup="true"
